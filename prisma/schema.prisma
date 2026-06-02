@@ -1,0 +1,121 @@
+// Prisma schema — Visa CRM
+// MySQL. `npm run db:push` bilan jadvallarni yaratasiz.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Bir martalik Excel yuklash = bitta "Guruh" (group).
+model Group {
+  id         Int          @id @default(autoincrement())
+  name       String // masalan "Guruh 1" yoki fayl nomi
+  note       String?      @db.Text
+  status     GroupStatus  @default(PENDING)
+  fileName   String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  applicants Applicant[]
+
+  @@index([status])
+}
+
+// Excel ichidagi har bir qator = bitta arizachi.
+model Applicant {
+  id               Int             @id @default(autoincrement())
+  groupId          Int
+  group            Group           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  // Umumiy shaxs (passport bo'yicha) — bir odam ko'p guruhda bo'lishi mumkin.
+  personId         Int?
+  person           Person?         @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  // VFS template maydonlari
+  surname          String
+  name             String
+  passportNumber   String
+  nationality      String?
+  gender           String?
+  birthdate        String? // dd.mm.yyyy ko'rinishida saqlanadi
+  passportValidity String? // dd.mm.yyyy
+  phone            String?
+  email            String? // Excel'dagi e-mail (ko'pincha bo'sh)
+  source           String?
+  subcategory      String?
+
+  // Excel'dagi qo'shimcha ustunlar
+  city             String?
+  category         String?
+  price            String?
+  bookDateFrom     String?
+  bookDateTo       String?
+  regDaysBefore    String?
+  groupLabel       String? // Excel'dagi "Group (not required)" ustuni
+
+  // Tizim tomonidan generatsiya qilinadi
+  generatedEmail   String? // masalan ism.familiya{id}@uzbekviza.uz
+  complete         Boolean @default(false) // required maydonlar to'liqmi
+
+  // Jarayon holati
+  status           ApplicantStatus @default(NEW)
+  appointmentRef   String? // booking natijasidagi raqam
+  pdfPath          String? // saqlangan PDF yo'li
+  passportPhoto    String? // yuklangan passport rasmi yo'li (/passports/..)
+  resultNote       String?         @db.Text
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([groupId])
+  @@index([status])
+  @@index([passportNumber])
+}
+
+// Umumiy shaxs — passport raqami bo'yicha noyob. Bir odam ko'p guruhda
+// (ko'p Applicant yozuvi) ishtirok etishi mumkin, lekin shaxs bitta.
+// Passport rasmi shu yerda (bazada) saqlanadi — ochiq turadi, faqat
+// tashqi tizimga yuborilganda ishlatiladi.
+model Person {
+  id               Int          @id @default(autoincrement())
+  passportNumber   String       @unique
+  surname          String
+  name             String
+  nationality      String?
+  gender           String?
+  birthdate        String?
+  passportValidity String?
+  phone            String?
+
+  // Standartlashtirilgan passport rasmi (Google standarti: 600x600 JPEG)
+  photo            Bytes?       @db.LongBlob
+  photoMime        String?      @default("image/jpeg")
+
+  applicants       Applicant[]
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+}
+
+enum GroupStatus {
+  PENDING // yuklandi, kutilyapti
+  READY // tekshirildi, tayyor
+  SLOT_OPEN // slot ochiq
+  SLOT_CLOSED // slot yopiq
+  BOOKING // zakas qilinyapti
+  DONE // tugadi
+  ARCHIVED // arxivlangan (qo'lda)
+}
+
+enum ApplicantStatus {
+  NEW // yangi yuklangan
+  EDITED // tahrirlangan
+  BOOKING // zakas qilinyapti (eski)
+  REGISTERED // ro'yxatdan o'tgan (1-bosqich)
+  ORDERED // buyurtma berilgan (2-bosqich)
+  BOOKED // band qilindi (PDF bor)
+  FAILED // xatolik
+  ARCHIVED // arxivlangan (qo'lda)
+}

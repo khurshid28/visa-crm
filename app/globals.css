@@ -1,0 +1,176 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f5f7fb;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: #0f172a;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Subtle scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  background-clip: content-box;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes blob {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(30px, -40px) scale(1.1);
+  }
+  66% {
+    transform: translate(-20px, 20px) scale(0.95);
+  }
+}
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all active:scale-[.98] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white shadow-sm hover:bg-brand-700 hover:shadow;
+  }
+  .btn-ghost {
+    @apply btn bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white shadow-sm hover:bg-red-700;
+  }
+  /* Pill action button (table rows) */
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm ring-1 transition-all hover:-translate-y-0.5 hover:shadow active:translate-y-0 disabled:opacity-50 disabled:hover:translate-y-0;
+  }
+  .pill-indigo {
+    @apply pill bg-indigo-50 text-indigo-700 ring-indigo-100 hover:bg-indigo-100;
+  }
+  .pill-violet {
+    @apply pill bg-violet-50 text-violet-700 ring-violet-100 hover:bg-violet-100;
+  }
+  .pill-emerald {
+    @apply pill bg-emerald-50 text-emerald-700 ring-emerald-100 hover:bg-emerald-100;
+  }
+  /* Icon-only round button */
+  .icon-btn {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 ring-1 ring-transparent transition-all hover:bg-slate-100 hover:text-slate-700 hover:ring-slate-200 active:scale-95;
+  }
+  .card {
+    @apply rounded-2xl bg-white p-6 shadow-soft ring-1 ring-slate-100;
+  }
+  .input {
+    @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium text-slate-500;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  /* Tables */
+  .table-wrap {
+    @apply overflow-x-auto rounded-2xl bg-white shadow-soft ring-1 ring-slate-100;
+  }
+  .table-base {
+    @apply w-full text-left text-sm;
+  }
+  .table-base thead {
+    @apply bg-slate-50/80 text-[11px] uppercase tracking-wide text-slate-400;
+  }
+  .table-base thead th {
+    @apply px-5 py-3 font-semibold;
+  }
+  .table-base tbody tr {
+    @apply border-t border-slate-100 transition-colors hover:bg-brand-50/40;
+  }
+  .table-base tbody td {
+    @apply px-5 py-3.5 text-slate-600;
+  }
+  /* Modal */
+  .modal-backdrop {
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm;
+    animation: fadeIn 0.15s ease;
+  }
+  .modal-panel {
+    @apply max-h-[90vh] w-full overflow-y-auto rounded-2xl bg-white shadow-soft ring-1 ring-slate-100;
+    animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+@layer utilities {
+  .animate-blob {
+    animation: blob 14s ease-in-out infinite;
+  }
+  .animate-float {
+    animation: float 4s ease-in-out infinite;
+  }
+  .animation-delay-2000 {
+    animation-delay: 2s;
+  }
+  .animation-delay-4000 {
+    animation-delay: 4s;
+  }
+}
