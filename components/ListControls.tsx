@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { SearchNormal1, Filter, ArrowDown2, CloseCircle } from "iconsax-react";
+import { SearchNormal1, Filter, CloseCircle } from "iconsax-react";
+import Select from "@/components/Select";
 
 type Option = { value: string; label: string };
 
@@ -75,35 +76,23 @@ export default function ListControls({
       </div>
 
       {statusOptions && statusOptions.length > 0 && (
-        <div className="relative">
-          <Filter
-            size={16}
-            variant="Bold"
-            className={`pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 ${
-              status ? "text-brand-600" : "text-slate-400"
-            }`}
-          />
-          <select
-            className={`cursor-pointer appearance-none rounded-xl border bg-white py-2.5 pl-10 pr-9 text-sm font-medium shadow-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100 ${
-              status
-                ? "border-brand-200 text-brand-700"
-                : "border-slate-200 text-slate-600"
-            }`}
-            value={status}
-            onChange={(e) => update({ status: e.target.value, page: "1" })}
-          >
-            <option value="">Barcha statuslar</option>
-            {statusOptions.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <ArrowDown2
-            size={15}
-            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
-          />
-        </div>
+        <Select
+          className="min-w-[200px]"
+          value={status}
+          onChange={(v) => update({ status: v, page: "1" })}
+          placeholder="Barcha statuslar"
+          leftIcon={
+            <Filter
+              size={16}
+              variant="Bold"
+              className={status ? "text-brand-600" : "text-slate-400"}
+            />
+          }
+          options={[
+            { value: "", label: "Barcha statuslar" },
+            ...statusOptions,
+          ]}
+        />
       )}
     </div>
   );

@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { People, Eye, Profile2User } from "iconsax-react";
+import { People, Profile2User } from "iconsax-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { APPLICANT_STATUS, APPLICANT_STATUS_KEYS } from "@/lib/status";
 import ListControls from "@/components/ListControls";
 import Pagination from "@/components/Pagination";
 import NameCell from "@/components/NameCell";
+import UserViewButton from "@/components/UserViewButton";
 export const dynamic = "force-dynamic";
 
 const PER_PAGE = 15;
@@ -125,14 +126,35 @@ export default async function UsersPage({
                     <span className={`badge ${s.cls}`}>{s.label}</span>
                   </td>
                   <td className="text-right">
-                    <Link
-                      href={`/groups/${a.groupId}`}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-700 ring-1 ring-brand-100 transition-all hover:-translate-y-0.5 hover:bg-brand-100 hover:shadow"
-                      title="Guruhda ko'rish"
-                    >
-                      <Eye size={14} variant="Bold" />
-                      Ko'rish
-                    </Link>
+                    <UserViewButton
+                      user={{
+                        id: a.id,
+                        groupId: a.groupId,
+                        surname: a.surname,
+                        name: a.name,
+                        passportNumber: a.passportNumber,
+                        nationality: a.nationality ?? null,
+                        gender: a.gender ?? null,
+                        birthdate: a.birthdate ? String(a.birthdate) : null,
+                        passportValidity: a.passportValidity
+                          ? String(a.passportValidity)
+                          : null,
+                        phone: a.phone ?? null,
+                        email: a.email ?? null,
+                        generatedEmail: a.generatedEmail ?? null,
+                        subcategory: a.subcategory ?? null,
+                        city: a.city ?? null,
+                        category: a.category ?? null,
+                        source: a.source ?? null,
+                        status: a.status,
+                        complete: a.complete,
+                        appointmentRef: a.appointmentRef ?? null,
+                        resultNote: a.resultNote ?? null,
+                        group: a.group
+                          ? { id: a.group.id, name: a.group.name }
+                          : null,
+                      }}
+                    />
                   </td>
                 </tr>
               );

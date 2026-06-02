@@ -13,6 +13,7 @@ import {
   UserAdd,
   Refresh,
   SearchNormal1,
+  Filter,
   ArrowLeft2,
   ArrowRight2,
 } from "iconsax-react";
@@ -25,6 +26,7 @@ import { buildEmail } from "@/lib/email";
 import { GENDERS, COUNTRIES, DEFAULT_COUNTRY } from "@/lib/options";
 import PassportReader, { type PassportFields } from "@/components/PassportReader";
 import NameCell from "@/components/NameCell";
+import Select from "@/components/Select";
 import { useToast } from "@/components/Toast";
 
 type Applicant = {
@@ -317,18 +319,26 @@ export default function GroupDetail({ group }: { group: Group }) {
             placeholder="Ism, familiya, pasport, email yoki telefon..."
           />
         </div>
-        <select
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+        <Select
+          className="min-w-[200px]"
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-        >
-          <option value="">Barcha statuslar</option>
-          {APPLICANT_STATUS_KEYS.map((k) => (
-            <option key={k} value={k}>
-              {APPLICANT_STATUS[k].label}
-            </option>
-          ))}
-        </select>
+          onChange={setStatusFilter}
+          placeholder="Barcha statuslar"
+          leftIcon={
+            <Filter
+              size={16}
+              variant="Bold"
+              className={statusFilter ? "text-brand-600" : "text-slate-400"}
+            />
+          }
+          options={[
+            { value: "", label: "Barcha statuslar" },
+            ...APPLICANT_STATUS_KEYS.map((k) => ({
+              value: k,
+              label: APPLICANT_STATUS[k].label,
+            })),
+          ]}
+        />
       </div>
 
       {/* Jadval */}
@@ -606,6 +616,7 @@ function EditModal({
 }) {
   const [form, setForm] = useState(applicant);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [personPhoto, setPersonPhoto] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const { toast } = useToast();
 
@@ -713,7 +724,11 @@ function EditModal({
         </div>
 
         <div className="mb-5">
-          <PassportReader onFill={fillFromPassport} onImage={setPhotoFile} />
+          <PassportReader
+            onFill={fillFromPassport}
+            onImage={setPhotoFile}
+            onPhoto={setPersonPhoto}
+          />
         </div>
 
         {applicant.passportPhoto && (
@@ -824,18 +839,12 @@ function SelectField({
   return (
     <div>
       <label className="label">{label}</label>
-      <select
-        className="input"
+      <Select
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="">{placeholder ?? "Tanlang"}</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+        onChange={onChange}
+        options={options}
+        placeholder={placeholder ?? "Tanlang"}
+      />
     </div>
   );
 }

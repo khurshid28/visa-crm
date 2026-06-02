@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Scan, TickCircle, Warning2, Gallery, Refresh, DocumentDownload } from "iconsax-react";
+import { Scan, TickCircle, Warning2, Gallery, Refresh } from "iconsax-react";
 import { parseMrz, type MrzResult } from "@/lib/mrz";
+import PassportCropper, { type CropBox } from "@/components/PassportCropper";
 
 export type PassportFields = {
   surname: string;
@@ -115,17 +116,15 @@ function canvasToFile(
   });
 }
 
-// Passportdan yuz (rasm) qismini alohida qirqib oladi.
-// 1) Brauzerda FaceDetector bo'lsa — aniq yuzni topadi.
-// 2) Bo'lmasa — TD3 passport joylashuviga ko'ra chap-yuqori qismni qirqadi.
-async function cropFaceCanvas(
-  source: HTMLCanvasElement,
-): Promise<HTMLCanvasElement> {
+// Passportdagi yuz (rasm) sohasini normallashtirilgan (0..1) box sifatida
+// aniqlaydi. Avval brauzer FaceDetector'ini sinaymiz (aniq), bo'lmasa
+// TD3 passport tuzilishiga mos standart joyni qaytaramiz. Box keyin
+// foydalanuvchi tomonidan qo'lda aniqlanadi (PassportCropper).
+async function detectFaceBox(source: HTMLCanvasElement): Promise<CropBox> {
   const W = source.width;
   const H = source.height;
 
   type Box = { x: number; y: number; width: number; height: number };
-  let box: Box | null = null;
 
   const FaceDetectorCtor = (
     window as unknown as { FaceDetector?: new () => unknown }
@@ -137,84 +136,28 @@ async function cropFaceCanvas(
       };
       const faces = await detector.detect(source);
       if (faces.length > 0) {
-        // Eng katta yuzni tanlaymiz.
         const f = faces.sort(
           (a, b) =>
             b.boundingBox.width * b.boundingBox.height -
             a.boundingBox.width * a.boundingBox.height,
         )[0].boundingBox;
-        const padX = f.width * 0.45;
-        const padY = f.height * 0.55;
-        box = {
-          x: Math.max(0, f.x - padX),
-          y: Math.max(0, f.y - padY),
-          width: Math.min(W, f.width + padX * 2),
-          height: Math.min(H, f.height + padY * 2),
-        };
+        // Yuz atrofiga bo'sh joy (passport foto uslubida).
+        const padX = f.width * 0.5;
+        const padTop = f.height * 0.5;
+        const padBot = f.height * 0.35;
+        const x = Math.max(0, f.x - padX);
+        const y = Math.max(0, f.y - padTop);
+        const x2 = Math.min(W, f.x + f.width + padX);
+        const y2 = Math.min(H, f.y + f.height + padBot);
+        return { x: x / W, y: y / H, w: (x2 - x) / W, h: (y2 - y) / H };
       }
     } catch {
-      box = null;
+      /* fallback */
     }
   }
 
-  // Fallback: passportdagi rasm odatda chap tomonda, MRZ'dan yuqorida.
-  if (!box) {
-    box = {
-      x: Math.round(W * 0.03),
-      y: Math.round(H * 0.1),
-      width: Math.round(W * 0.37),
-      height: Math.round(H * 0.62),
-    };
-  }
-
-  const out = document.createElement("canvas");
-  out.width = Math.max(1, Math.round(box.width));
-  out.height = Math.max(1, Math.round(box.height));
-  const ctx = out.getContext("2d");
-  if (ctx) {
-    ctx.drawImage(
-      source,
-      box.x,
-      box.y,
-      box.width,
-      box.height,
-      0,
-      0,
-      out.width,
-      out.height,
-    );
-  }
-  return out;
-}
-
-// Google/ICAO uslubidagi standart portret: 600x600 kvadrat, JPEG.
-// Markazdan kvadrat qirqib, oq fonga joylaydi.
-const PHOTO_SIZE = 600;
-
-function standardizePhoto(source: HTMLCanvasElement): Promise<File> {
-  const out = document.createElement("canvas");
-  out.width = PHOTO_SIZE;
-  out.height = PHOTO_SIZE;
-  const ctx = out.getContext("2d");
-  if (ctx) {
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, PHOTO_SIZE, PHOTO_SIZE);
-    // Markazdan kvadrat qism.
-    const side = Math.min(source.width, source.height);
-    const sx = (source.width - side) / 2;
-    const sy = (source.height - side) / 2;
-    ctx.drawImage(source, sx, sy, side, side, 0, 0, PHOTO_SIZE, PHOTO_SIZE);
-  }
-  return new Promise((resolve) => {
-    out.toBlob(
-      (blob) => {
-        const safe = blob ?? new Blob([], { type: "image/jpeg" });
-        resolve(new File([safe], "passport-photo.jpg", { type: "image/jpeg" }));
-      },
-      "image/jpeg",
-      0.9,
-    );
-  });
+  // TD3 (Uzbekiston) passport: foto chap tomonda, pastki yarmida.
+  return { x: 0.02, y: 0.32, w: 0.33, h: 0.52 };
 }
 
 export default function PassportReader({
@@ -229,7 +172,8 @@ export default function PassportReader({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [preview, setPreview] = useState<string | null>(null);
-  const [faceUrl, setFaceUrl] = useState<string | null>(null);
+  const [correctedSrc, setCorrectedSrc] = useState<string | null>(null);
+  const [cropBox, setCropBox] = useState<CropBox | null>(null);
   const [result, setResult] = useState<MrzResult | null>(null);
   const [error, setError] = useState("");
 
@@ -252,7 +196,8 @@ export default function PassportReader({
     setProgress(0);
     setError("");
     setResult(null);
-    setFaceUrl(null);
+    setCorrectedSrc(null);
+    setCropBox(null);
     try {
       const bitmap = await createImageBitmap(file);
       const baseName = file.name.replace(/\.[^.]+$/, "") || "passport";
@@ -296,19 +241,17 @@ export default function PassportReader({
       // To'g'rilangan (tik turgan) rangli rasmni saqlash uchun tayyorlaymiz.
       const correctedCanvas = drawRotated(bitmap, bestRotation);
       const correctedFile = await canvasToFile(correctedCanvas, baseName);
-      setPreview(URL.createObjectURL(correctedFile));
+      const correctedUrl = URL.createObjectURL(correctedFile);
+      setPreview(correctedUrl);
+      setCorrectedSrc(correctedUrl);
       onImage?.(correctedFile);
 
-      // Passportdagi yuz (rasm) qismini alohida PNG qilib qirqamiz.
+      // Yuz sohasini taxminiy aniqlaymiz — foydalanuvchi qo'lda to'g'rilaydi.
       try {
-        const faceCanvas = await cropFaceCanvas(correctedCanvas);
-        const faceFile = await canvasToFile(faceCanvas, `${baseName}-foto`);
-        setFaceUrl(URL.createObjectURL(faceFile));
-        // Standartlashtirilgan portret (600x600 JPEG) — bazaga saqlash uchun.
-        const standard = await standardizePhoto(faceCanvas);
-        onPhoto?.(standard);
+        const initial = await detectFaceBox(correctedCanvas);
+        setCropBox(initial);
       } catch {
-        setFaceUrl(null);
+        setCropBox({ x: 0.02, y: 0.32, w: 0.33, h: 0.52 });
       }
 
       if (!bestRes) {
@@ -386,27 +329,13 @@ export default function PassportReader({
         </p>
       )}
 
-      {faceUrl && (
-        <div className="mt-3 flex items-center gap-3 rounded-lg bg-white p-3 ring-1 ring-slate-100">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={faceUrl}
-            alt="passport foto"
-            className="h-20 w-16 rounded object-cover ring-1 ring-slate-200"
+      {correctedSrc && cropBox && (
+        <div className="mt-3">
+          <PassportCropper
+            src={correctedSrc}
+            initialBox={cropBox}
+            onCropped={(_png, jpeg) => onPhoto?.(jpeg)}
           />
-          <div className="text-sm">
-            <p className="font-medium text-slate-700">Passportdagi rasm (PNG)</p>
-            <p className="mb-1.5 text-xs text-slate-400">
-              Avtomatik qirqildi — tekshirib oling
-            </p>
-            <a
-              href={faceUrl}
-              download="passport-foto.png"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700 ring-1 ring-brand-100 transition hover:bg-brand-100"
-            >
-              <DocumentDownload size={14} variant="Bold" /> PNG yuklab olish
-            </a>
-          </div>
         </div>
       )}
 
