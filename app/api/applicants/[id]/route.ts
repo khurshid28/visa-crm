@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApplicantStatus } from "@prisma/client";
 import { REQUIRED_FIELDS } from "@/lib/excel";
+import { logApplicantChange } from "@/lib/audit";
+import { getSession } from "@/lib/auth";
 
 type Params = { params: { id: string } };
 
@@ -48,23 +50,54 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   // Maydon tahrir qilingan bo'lsa, to'liqlikni qayta hisoblaymiz.
   const fieldEdited = EDITABLE.some((k) => k in body);
-  if (fieldEdited) {
-    const current = await prisma.applicant.findUnique({ where: { id } });
-    if (current) {
-      const merged = { ...current, ...data } as Record<string, unknown>;
-      data.complete = REQUIRED_FIELDS.every(
-        (f) => String(merged[f] ?? "").trim().length > 0,
-      );
-    }
+  const current = await prisma.applicant.findUnique({ where: { id } });
+  if (fieldEdited && current) {
+    const merged = { ...current, ...data } as Record<string, unknown>;
+    data.complete = REQUIRED_FIELDS.every(
+      (f) => String(merged[f] ?? "").trim().length > 0,
+    );
   }
 
   const applicant = await prisma.applicant.update({ where: { id }, data });
+
+  // O'zgarishni tarixga yozamiz (kim, nima, oldin/keyin).
+  const session = await getSession();
+  const changedKeys = Object.keys(data);
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+  for (const k of changedKeys) {
+    before[k] = current ? (current as Record<string, unknown>)[k] : null;
+    after[k] = (applicant as Record<string, unknown>)[k];
+  }
+  await logApplicantChange({
+    applicantId: id,
+    groupId: applicant.groupId,
+    action: fieldEdited ? "edit" : "status",
+    fields: changedKeys,
+    before,
+    after,
+    actor: session?.username ?? null,
+    source: "web",
+  });
+
   return NextResponse.json(applicant);
 }
 
 // DELETE /api/applicants/:id
 export async function DELETE(_req: NextRequest, { params }: Params) {
   const id = Number(params.id);
+  const current = await prisma.applicant.findUnique({ where: { id } });
   await prisma.applicant.delete({ where: { id } });
+
+  const session = await getSession();
+  await logApplicantChange({
+    applicantId: null, // arizachi o'chirildi
+    groupId: current?.groupId ?? null,
+    action: "delete",
+    before: current ? (current as Record<string, unknown>) : null,
+    actor: session?.username ?? null,
+    source: "web",
+  });
+
   return NextResponse.json({ ok: true });
 }

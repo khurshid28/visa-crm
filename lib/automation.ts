@@ -64,6 +64,97 @@ function urlForStage(stage: Stage): string | null {
   return u && u.trim() ? u.trim() : null;
 }
 
+export type SlotCheckResult = {
+  open: boolean;
+  note: string;
+  url: string;
+};
+
+/**
+ * Saytda slot (vaqt oynasi) ochiq-yopiqligini Playwright bilan tekshiradi.
+ * URL .env dan: BOOKING_SLOT_URL. Ochiqlik belgilari .env dan moslashtiriladi:
+ *   BOOKING_SLOT_OPEN_TEXT   — sahifada shu matn bo'lsa = ochiq
+ *   BOOKING_SLOT_CLOSED_TEXT — sahifada shu matn bo'lsa = yopiq
+ * Default belgilar: "available/slot/book" = ochiq, "no appointment/closed" = yopiq.
+ * Hech qachon exception tashlamaydi.
+ */
+export async function checkSlotOpen(): Promise<SlotCheckResult> {
+  const url = process.env.BOOKING_SLOT_URL?.trim() || "";
+  if (!url) {
+    return {
+      open: false,
+      note: "URL sozlanmagan (.env: BOOKING_SLOT_URL)",
+      url: "",
+    };
+  }
+
+  const openText = (process.env.BOOKING_SLOT_OPEN_TEXT || "")
+    .split("|")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const closedText = (process.env.BOOKING_SLOT_CLOSED_TEXT || "")
+    .split("|")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  const defaultOpen = ["available", "book now", "select slot", "free slot"];
+  const defaultClosed = [
+    "no appointment",
+    "no slots",
+    "not available",
+    "closed",
+    "fully booked",
+    "band emas",
+  ];
+  const openMarks = openText.length ? openText : defaultOpen;
+  const closedMarks = closedText.length ? closedText : defaultClosed;
+
+  let browser: import("playwright").Browser | null = null;
+  try {
+    const { chromium } = await import("playwright");
+    browser = await chromium.launch({ headless: envHeadless() });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page
+      .waitForLoadState("networkidle", { timeout: 8000 })
+      .catch(() => {});
+
+    const body = (
+      (await page
+        .locator("body")
+        .innerText()
+        .catch(() => "")) || ""
+    ).toLowerCase();
+
+    await browser.close();
+    browser = null;
+
+    const hasClosed = closedMarks.some((m) => body.includes(m));
+    const hasOpen = openMarks.some((m) => body.includes(m));
+    // Yopiq belgisi ustun: avval yopiqlikni tekshiramiz.
+    if (hasClosed) {
+      return { open: false, note: "Saytda slot yopiq", url };
+    }
+    if (hasOpen) {
+      return { open: true, note: "Saytda slot ochiq", url };
+    }
+    return {
+      open: false,
+      note: "Slot holati aniqlanmadi (belgi topilmadi)",
+      url,
+    };
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      open: false,
+      note: `Slot tekshirish xatosi: ${msg.slice(0, 200)}`,
+      url,
+    };
+  }
+}
+
 /** Sahifa matnidan tasdiqlash / appointment raqamini ajratib oladi. */
 function extractRef(text: string): string | null {
   const patterns = [

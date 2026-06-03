@@ -99,6 +99,22 @@ export function missingFields(rec: Partial<ParsedApplicant>): string[] {
   return REQUIRED_FIELDS.filter((f) => clean(rec[f]).length === 0);
 }
 
+// Majburiy maydonlarning o'zbekcha nomlari (xatolarni ko'rsatish uchun).
+export const FIELD_LABELS: Record<string, string> = {
+  surname: "Familiya",
+  name: "Ism",
+  passportNumber: "Passport raqami",
+  nationality: "Fuqarolik",
+  gender: "Jins",
+  birthdate: "Tug'ilgan sana",
+  passportValidity: "Passport amal muddati",
+};
+
+// Yetishmayotgan maydonlarni o'zbekcha nom bilan qaytaradi.
+export function missingFieldLabels(rec: Partial<ParsedApplicant>): string[] {
+  return missingFields(rec).map((f) => FIELD_LABELS[f] ?? f);
+}
+
 /**
  * Excel/CSV buffer'dan arizachilar ro'yxatini o'qiydi.
  * Faqat surname+name+passport bo'lgan qatorlar qabul qilinadi (minimal identifikatsiya).

@@ -12,16 +12,100 @@ datasource db {
 
 // Bir martalik Excel yuklash = bitta "Guruh" (group).
 model Group {
-  id         Int          @id @default(autoincrement())
-  name       String // masalan "Guruh 1" yoki fayl nomi
-  note       String?      @db.Text
-  status     GroupStatus  @default(PENDING)
-  fileName   String?
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
-  applicants Applicant[]
+  id          Int          @id @default(autoincrement())
+  name        String // masalan "Guruh 1" yoki fayl nomi
+  note        String?      @db.Text
+  status      GroupStatus  @default(PENDING)
+  fileName    String?
+
+  // Slot (vaqt oynasi) — web va bot orqali boshqariladi.
+  slotOpenAt  DateTime? // slot ochilgan/ochiladigan vaqt
+  slotCloseAt DateTime? // slot yopilgan/yopiladigan vaqt
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  applicants  Applicant[]
+  runs        RunAttempt[]
+  imports     ImportLog[]
+  statusLogs  GroupStatusLog[]
 
   @@index([status])
+}
+
+// Guruh bo'yicha har bir "run" (urinish) — run-1, run-2, ...
+// register/order bosqichlari bo'yicha natijalar shu yerda saqlanadi.
+model RunAttempt {
+  id        Int      @id @default(autoincrement())
+  groupId   Int
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  attempt   Int      @default(1) // guruh ichidagi tartib raqami (run-1, run-2...)
+  stage     String // "register" | "order"
+  total     Int      @default(0)
+  succeeded Int      @default(0)
+  failed    Int      @default(0)
+  source    String   @default("web") // "web" | "bot"
+  note      String?  @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([groupId])
+}
+
+// Excel/CSV import tarixi — kim qachon nechta arizachi yukladi.
+model ImportLog {
+  id        Int      @id @default(autoincrement())
+  groupId   Int
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  fileName  String? // yuklangan fayl nomi
+  filePath  String? // diskda saqlangan asl fayl yo'li (uploads/imports/...)
+  fileSize  Int? // fayl hajmi (bayt)
+  total     Int      @default(0) // fayldagi yaroqli qatorlar
+  imported  Int      @default(0) // qo'shilgan arizachilar
+  complete  Int      @default(0) // to'liq ma'lumotli
+  reused    Int      @default(0) // mavjud shaxs (boshqa guruhdan)
+  skipped   Int      @default(0) // guruhda allaqachon bor — tashlandi
+  source    String   @default("web") // "web" | "bot"
+  userId    String? // Telegram user id (bot orqali bo'lsa)
+  username  String? // @username (bot orqali bo'lsa)
+  createdAt DateTime @default(now())
+
+  @@index([groupId])
+  @@index([createdAt])
+}
+
+// Guruh status o'zgarishlari tarixi — hech qaysi o'zgarish yo'qolmaydi.
+model GroupStatusLog {
+  id         Int      @id @default(autoincrement())
+  groupId    Int
+  group      Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  fromStatus String? // oldingi status (birinchi marta bo'lsa null)
+  toStatus   String // yangi status
+  source     String   @default("web") // "web" | "bot" | "system"
+  note       String?  @db.Text // sabab / izoh
+  userId     String? // Telegram user id (bot orqali bo'lsa)
+  username   String? // @username (bot orqali bo'lsa)
+  createdAt  DateTime @default(now())
+
+  @@index([groupId])
+  @@index([createdAt])
+}
+
+// Telegram bot xabarlari tarixi — kim, qachon, nima yozdi va javob nima edi.
+model BotMessage {
+  id        Int      @id @default(autoincrement())
+  chatId    String // Telegram chat id
+  userId    String? // Telegram user id
+  username  String? // @username (bo'lishi shart emas)
+  firstName String? // foydalanuvchi ismi
+  isAdmin   Boolean  @default(false) // admin chat'idanmi
+  type      String   @default("text") // text | command | document | photo | other
+  text      String?  @db.Text // xabar matni / komanda
+  success   Boolean  @default(true) // qayta ishlash muvaffaqiyatlimi
+  response  String?  @db.Text // botning javobi yoki xato matni
+  createdAt DateTime @default(now())
+
+  @@index([chatId])
+  @@index([userId])
+  @@index([createdAt])
 }
 
 // Excel ichidagi har bir qator = bitta arizachi.
@@ -70,9 +154,31 @@ model Applicant {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
+  changeLogs       ApplicantChangeLog[]
+
   @@index([groupId])
   @@index([status])
   @@index([passportNumber])
+}
+
+// Arizachi (user/mijoz) o'zgarishlari tarixi — kim, qachon, nimani o'zgartirdi.
+// Tahrir, status o'zgarishi va o'chirish ham yoziladi. Hech narsa yo'qolmaydi.
+model ApplicantChangeLog {
+  id          Int        @id @default(autoincrement())
+  applicantId Int?
+  applicant   Applicant? @relation(fields: [applicantId], references: [id], onDelete: SetNull)
+  groupId     Int? // qaysi guruhdagi arizachi (o'chirilgandan keyin ham qoladi)
+  action      String // "edit" | "status" | "delete"
+  fields      String?    @db.Text // o'zgargan maydonlar ro'yxati (vergul bilan)
+  before      String?    @db.Text // o'zgarishdan oldingi qiymatlar (JSON)
+  after       String?    @db.Text // o'zgarishdan keyingi qiymatlar (JSON)
+  actor       String? // o'zgartirgan admin (username) yoki "bot"
+  source      String     @default("web") // "web" | "bot" | "system"
+  createdAt   DateTime   @default(now())
+
+  @@index([applicantId])
+  @@index([groupId])
+  @@index([createdAt])
 }
 
 // Umumiy shaxs — passport raqami bo'yicha noyob. Bir odam ko'p guruhda

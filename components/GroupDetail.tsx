@@ -157,6 +157,36 @@ export default function GroupDetail({ group }: { group: Group }) {
     }
   }
 
+  async function toggleSlot(action: "open" | "close") {
+    setBusyId("group");
+    try {
+      const body: { slot: string; closeAt?: string } = { slot: action };
+      if (action === "open") {
+        const mins = window.prompt(
+          "Slot necha daqiqadan keyin yopilsin? (bo'sh = qo'lda yopilguncha)",
+          "",
+        );
+        if (mins && Number(mins) > 0) {
+          body.closeAt = new Date(
+            Date.now() + Number(mins) * 60_000,
+          ).toISOString();
+        }
+      }
+      const res = await fetch(`/api/groups/${group.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error();
+      toast(action === "open" ? "Slot ochildi" : "Slot yopildi");
+      router.refresh();
+    } catch {
+      toast("Amal bajarilmadi", "error");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function archiveApplicant(id: number) {
     const ok = await confirm({
       title: "Arizachini arxivlash",
@@ -280,6 +310,16 @@ export default function GroupDetail({ group }: { group: Group }) {
             >
               <DocumentDownload size={18} />
             </a>
+            <button
+              className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2.5 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all hover:bg-white/25 active:scale-95 disabled:opacity-60"
+              onClick={() =>
+                toggleSlot(group.status === "SLOT_OPEN" ? "close" : "open")
+              }
+              disabled={busyId === "group"}
+              title="Slotni ochish/yopish"
+            >
+              {group.status === "SLOT_OPEN" ? "Slotni yopish" : "Slot ochish"}
+            </button>
             <button
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white ring-1 ring-white/25 transition-all hover:bg-white/20 active:scale-95"
               onClick={archiveGroup}
