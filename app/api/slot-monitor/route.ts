@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
     });
     await logSlotEvent("configure", {
       slotAt: slotAt.toISOString(),
+      closeAt: new Date(slotAt.getTime() + windowMinutes * 60_000).toISOString(),
       message: state.lastMessage,
       source: "web",
     });

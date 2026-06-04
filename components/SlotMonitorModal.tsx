@@ -109,6 +109,19 @@ function fmtDuration(sec: number | null): string {
   return `${h}s ${pad2(m % 60)}d`;
 }
 
+// Slot oynasini (slotAt -> closeAt) o'qiladigan ko'rinishga keltiradi.
+function fmtWindow(slotAt: string | null, closeAt: string | null): string {
+  if (!slotAt || !closeAt) return "—";
+  const mins = Math.round(
+    (new Date(closeAt).getTime() - new Date(slotAt).getTime()) / 60_000,
+  );
+  if (mins <= 0) return "—";
+  if (mins < 60) return `${mins} daq`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h} soat ${m} daq` : `${h} soat`;
+}
+
 export default function SlotMonitorModal({
   onClose,
 }: {
@@ -501,9 +514,10 @@ export default function SlotMonitorModal({
                     <thead className="sticky top-0 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                       <tr>
                         <th className="px-3 py-2 font-medium">Voqea</th>
-                        <th className="px-3 py-2 font-medium">Vaqt</th>
-                        <th className="px-3 py-2 font-medium">Userlar</th>
+                        <th className="px-3 py-2 font-medium">Slot vaqti</th>
                         <th className="px-3 py-2 font-medium">Davomiyligi</th>
+                        <th className="px-3 py-2 font-medium">Userlar</th>
+                        <th className="px-3 py-2 font-medium">Sodir bo'ldi</th>
                         <th className="px-3 py-2 font-medium">Manba</th>
                       </tr>
                     </thead>
@@ -514,6 +528,7 @@ export default function SlotMonitorModal({
                           cls: "bg-slate-100 text-slate-600",
                           dot: "bg-slate-400",
                         };
+                        const windowLabel = fmtWindow(ev.slotAt, ev.closeAt);
                         return (
                           <tr
                             key={ev.id}
@@ -529,8 +544,13 @@ export default function SlotMonitorModal({
                                 {meta.label}
                               </span>
                             </td>
+                            <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-700 dark:text-slate-200">
+                              {ev.slotAt ? fmtDateTime(ev.slotAt) : "—"}
+                            </td>
                             <td className="whitespace-nowrap px-3 py-2 text-slate-500 dark:text-slate-400">
-                              {fmtDateTime(ev.createdAt)}
+                              {windowLabel !== "—"
+                                ? windowLabel
+                                : fmtDuration(ev.durationSec)}
                             </td>
                             <td className="px-3 py-2">
                               {ev.usersQueued > 0 ? (
@@ -542,8 +562,8 @@ export default function SlotMonitorModal({
                                 <span className="text-slate-300">—</span>
                               )}
                             </td>
-                            <td className="px-3 py-2 text-slate-500 dark:text-slate-400">
-                              {fmtDuration(ev.durationSec)}
+                            <td className="whitespace-nowrap px-3 py-2 text-slate-400 dark:text-slate-500">
+                              {fmtDateTime(ev.createdAt)}
                             </td>
                             <td className="px-3 py-2">
                               <span className="inline-flex items-center gap-1 text-slate-400">
