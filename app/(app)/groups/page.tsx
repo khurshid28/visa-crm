@@ -124,7 +124,9 @@ export default async function GroupsPage({
                   <td>
                     <div className="flex items-center gap-2">
                       <StatusBadge status={g.status} kind="group" />
-                      <GroupPauseToggle groupId={g.id} paused={g.paused} />
+                      {registered > 0 && (
+                        <GroupPauseToggle groupId={g.id} paused={g.paused} />
+                      )}
                     </div>
                   </td>
                   <td className="whitespace-nowrap text-slate-400">
