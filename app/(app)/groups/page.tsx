@@ -9,6 +9,7 @@ import UploadGroup from "@/components/UploadGroup";
 import ListControls from "@/components/ListControls";
 import Pagination from "@/components/Pagination";
 import SlotMonitorBar from "@/components/SlotMonitorBar";
+import GroupPauseToggle from "@/components/GroupPauseToggle";
 
 export const dynamic = "force-dynamic";
 
@@ -121,7 +122,10 @@ export default async function GroupsPage({
                     </div>
                   </td>
                   <td>
-                    <StatusBadge status={g.status} kind="group" />
+                    <div className="flex items-center gap-2">
+                      <StatusBadge status={g.status} kind="group" />
+                      <GroupPauseToggle groupId={g.id} paused={g.paused} />
+                    </div>
                   </td>
                   <td className="whitespace-nowrap text-slate-400">
                     {fmtDateTime(g.createdAt)}

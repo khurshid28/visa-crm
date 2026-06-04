@@ -248,19 +248,7 @@ export default function DateTimePicker({
           </div>
 
           {/* Tugmalar */}
-          <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 dark:border-slate-700">
-            <button
-              type="button"
-              onClick={() => {
-                const d = new Date();
-                d.setMinutes(d.getMinutes() + 5, 0, 0);
-                onChange(toLocalIso(d));
-                setViewDate(new Date(d.getFullYear(), d.getMonth(), 1));
-              }}
-              className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 transition hover:text-slate-700 dark:hover:text-slate-300"
-            >
-              <Clock size={13} /> +5 daq
-            </button>
+          <div className="mt-3 flex items-center justify-end border-t border-slate-100 pt-3 dark:border-slate-700">
             <button
               type="button"
               onClick={() => setOpen(false)}
