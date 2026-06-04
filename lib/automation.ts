@@ -195,9 +195,23 @@ export async function checkSlotOpen(): Promise<SlotCheckResult> {
     if (hasOpen) {
       return { open: true, note: "Saytda slot ochiq", url };
     }
+    // Belgi topilmadi (sayt o'zgargan/yangi sahifa). Monitoring jadval asosida
+    // ishlaydi — admin slot vaqtini o'zi belgilaydi. Shuning uchun default'da
+    // bunday holatni "ochiq" deb hisoblaymiz va navbatni ishga tushiramiz.
+    // Qat'iy rejim kerak bo'lsa: .env BOOKING_SLOT_REQUIRE_MARK=true.
+    const requireMark =
+      (process.env.BOOKING_SLOT_REQUIRE_MARK || "").trim().toLowerCase() ===
+      "true";
+    if (requireMark) {
+      return {
+        open: false,
+        note: "Slot holati aniqlanmadi (belgi topilmadi)",
+        url,
+      };
+    }
     return {
-      open: false,
-      note: "Slot holati aniqlanmadi (belgi topilmadi)",
+      open: true,
+      note: "Belgi topilmadi — jadval bo'yicha ochiq deb hisoblandi",
       url,
     };
   } catch (err) {
