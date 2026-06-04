@@ -36,6 +36,8 @@ export async function POST(req: NextRequest) {
     const rawWin = Number(body.windowMinutes);
     const windowMinutes =
       Number.isFinite(rawWin) && rawWin > 0 ? Math.round(rawWin) : 5;
+    // Hozir navbatda qancha user/guruh kutayotganini suratga olamiz.
+    const snapshot = await getSlotQueueStats();
     const state = await setSlotMonitorState({
       active: true,
       paused: false,
@@ -47,8 +49,12 @@ export async function POST(req: NextRequest) {
     });
     await logSlotEvent("configure", {
       slotAt: slotAt.toISOString(),
-      closeAt: new Date(slotAt.getTime() + windowMinutes * 60_000).toISOString(),
+      closeAt: new Date(
+        slotAt.getTime() + windowMinutes * 60_000,
+      ).toISOString(),
       message: state.lastMessage,
+      usersQueued: snapshot.registeredTotal,
+      groupsCount: snapshot.groups,
       source: "web",
     });
     return NextResponse.json({ ok: true, state });

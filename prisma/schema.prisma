@@ -308,6 +308,7 @@ model SlotEvent {
   message     String?   @db.Text
   usersQueued Int       @default(0) // order queue'ga yuborilgan userlar
   usersDone   Int       @default(0) // bajarilgan (ordered) userlar
+  groupsCount Int       @default(0) // shu voqeada qatnashgan guruhlar soni
   durationSec Int? // slot qancha vaqt ochiq turdi (close/expired uchun)
   source      String    @default("system") // web | bot | system
   username    String? // o'zgartirgan admin (bo'lsa)

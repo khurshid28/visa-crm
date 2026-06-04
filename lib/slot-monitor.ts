@@ -38,6 +38,7 @@ export type SlotEvent = {
   message: string | null;
   usersQueued: number;
   usersDone: number;
+  groupsCount: number;
   durationSec: number | null;
   source: string;
   username: string | null;
@@ -177,6 +178,7 @@ export async function logSlotEvent(
     message?: string | null;
     usersQueued?: number;
     usersDone?: number;
+    groupsCount?: number;
     durationSec?: number | null;
     source?: "web" | "bot" | "system";
     username?: string | null;
@@ -191,6 +193,7 @@ export async function logSlotEvent(
         message: data.message ?? null,
         usersQueued: data.usersQueued ?? 0,
         usersDone: data.usersDone ?? 0,
+        groupsCount: data.groupsCount ?? 0,
         durationSec: data.durationSec ?? null,
         source: data.source ?? "system",
         username: data.username ?? null,
@@ -214,6 +217,7 @@ export async function getSlotEvents(limit = 30): Promise<SlotEvent[]> {
     message: r.message,
     usersQueued: r.usersQueued,
     usersDone: r.usersDone,
+    groupsCount: r.groupsCount,
     durationSec: r.durationSec,
     source: r.source,
     username: r.username,
@@ -377,6 +381,7 @@ export async function runSlotMonitorTick(): Promise<SlotTickResult> {
     slotAt: current.slotAt,
     message: next.lastMessage,
     usersQueued: queued.queuedJobs,
+    groupsCount: queued.totalGroups,
     source: "system",
   });
 

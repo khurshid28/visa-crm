@@ -10,7 +10,8 @@ import {
   Stop,
   CalendarTick,
   ProfileCircle,
-  TickCircle,
+  Profile2User,
+  People,
   Refresh,
 } from "iconsax-react";
 import { fmtDateTime } from "@/lib/date";
@@ -43,6 +44,7 @@ type SlotEvent = {
   message: string | null;
   usersQueued: number;
   usersDone: number;
+  groupsCount: number;
   durationSec: number | null;
   source: string;
   username: string | null;
@@ -553,11 +555,25 @@ export default function SlotMonitorModal({
                                 : fmtDuration(ev.durationSec)}
                             </td>
                             <td className="px-3 py-2">
-                              {ev.usersQueued > 0 ? (
-                                <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
-                                  <TickCircle size={13} variant="Bold" />
-                                  {ev.usersQueued}
-                                </span>
+                              {ev.usersQueued > 0 || ev.groupsCount > 0 ? (
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    title="Userlar"
+                                    className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400"
+                                  >
+                                    <Profile2User size={13} variant="Bold" />
+                                    {ev.usersQueued}
+                                  </span>
+                                  {ev.groupsCount > 0 && (
+                                    <span
+                                      title="Guruhlar"
+                                      className="inline-flex items-center gap-1 font-medium text-brand-600 dark:text-brand-400"
+                                    >
+                                      <People size={13} variant="Bold" />
+                                      {ev.groupsCount}
+                                    </span>
+                                  )}
+                                </div>
                               ) : (
                                 <span className="text-slate-300">—</span>
                               )}
