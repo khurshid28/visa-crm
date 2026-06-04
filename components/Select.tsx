@@ -3,7 +3,22 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown2, TickCircle } from "iconsax-react";
 
-export type SelectOption = { value: string; label: string };
+export type SelectOption = { value: string; label: string; iso2?: string };
+
+// Bayroq rasmi (flagcdn). Windowsda emoji bayroqlar ko'rinmaydi.
+function Flag({ iso2 }: { iso2?: string }) {
+  if (!iso2) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`https://flagcdn.com/${iso2}.svg`}
+      alt=""
+      width={20}
+      height={15}
+      className="h-[15px] w-[20px] shrink-0 rounded-sm object-cover ring-1 ring-black/5"
+    />
+  );
+}
 
 // Chiroyli, to'liq stillangan dropdown (native <select> o'rniga).
 // Ochilganda yumshoq animatsiya, tanlangan element belgilanadi.
@@ -30,7 +45,14 @@ export default function Select({
   const [highlight, setHighlight] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
 
-  const selected = options.find((o) => o.value === value);
+  // Tanlangan qiymat ro'yxatda bo'lmasa ham (masalan eski/qisqartirilgan
+  // ro'yxatdan tushib qolgan davlat), uni ko'rsatish uchun vaqtincha qo'shamiz.
+  const inList = options.find((o) => o.value === value);
+  const displayOptions =
+    value && !inList
+      ? [{ value, label: value }, ...options]
+      : options;
+  const selected = displayOptions.find((o) => o.value === value);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -58,13 +80,13 @@ export default function Select({
     if (e.key === "Escape") setOpen(false);
     else if (e.key === "ArrowDown") {
       e.preventDefault();
-      setHighlight((h) => Math.min(options.length - 1, h + 1));
+      setHighlight((h) => Math.min(displayOptions.length - 1, h + 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setHighlight((h) => Math.max(0, h - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const opt = options[highlight];
+      const opt = displayOptions[highlight];
       if (opt) choose(opt.value);
     }
   }
@@ -82,11 +104,14 @@ export default function Select({
       >
         {leftIcon}
         <span
-          className={`flex-1 truncate ${
+          className={`flex flex-1 items-center gap-2 truncate ${
             selected ? "font-medium text-slate-700" : "text-slate-400"
           }`}
         >
-          {selected ? selected.label : placeholder}
+          {selected?.iso2 && <Flag iso2={selected.iso2} />}
+          <span className="truncate">
+            {selected ? selected.label : placeholder}
+          </span>
         </span>
         <ArrowDown2
           size={16}
@@ -98,10 +123,10 @@ export default function Select({
 
       {open && (
         <div className="absolute z-50 mt-2 max-h-64 w-full origin-top animate-[popIn_.12s_ease-out] overflow-auto rounded-xl border border-slate-100 bg-white p-1.5 shadow-xl ring-1 ring-black/5">
-          {options.length === 0 && (
+          {displayOptions.length === 0 && (
             <div className="px-3 py-2 text-sm text-slate-400">Bo'sh</div>
           )}
-          {options.map((o, i) => {
+          {displayOptions.map((o, i) => {
             const active = o.value === value;
             return (
               <button
@@ -117,7 +142,10 @@ export default function Select({
                       : "text-slate-600"
                 }`}
               >
-                <span className="truncate">{o.label}</span>
+                <span className="flex items-center gap-2 truncate">
+                  <Flag iso2={o.iso2} />
+                  <span className="truncate">{o.label}</span>
+                </span>
                 {active && (
                   <TickCircle
                     size={16}

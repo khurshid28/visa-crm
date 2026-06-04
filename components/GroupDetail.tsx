@@ -9,23 +9,28 @@ import {
   DocumentDownload,
   TickCircle,
   Warning2,
-  Sms,
   UserAdd,
   Refresh,
   SearchNormal1,
   Filter,
   ArrowLeft2,
   ArrowRight2,
+  Profile2User,
+  Send2,
+  Pause,
+  Play,
+  CloseCircle,
 } from "iconsax-react";
 import {
   GROUP_STATUS,
   APPLICANT_STATUS,
   APPLICANT_STATUS_KEYS,
 } from "@/lib/status";
-import { buildEmail } from "@/lib/email";
-import { GENDERS, COUNTRIES, DEFAULT_COUNTRY } from "@/lib/options";
+import { buildEmail, buildPassword } from "@/lib/email";
+import { GENDERS, COUNTRIES, DEFAULT_COUNTRY, CATEGORIES, SUBCATEGORIES } from "@/lib/options";
 import PassportReader, { type PassportFields } from "@/components/PassportReader";
 import NameCell from "@/components/NameCell";
+import CredentialCell from "@/components/CredentialCell";
 import Select from "@/components/Select";
 import StatusBadge from "@/components/StatusBadge";
 import { fmtDateTime } from "@/lib/date";
@@ -42,12 +47,16 @@ type Applicant = {
   passportValidity: string | null;
   phone: string | null;
   email: string | null;
+  category: string | null;
   subcategory: string | null;
   generatedEmail: string | null;
+  generatedPassword: string | null;
   complete: boolean;
   status: string;
   appointmentRef: string | null;
   passportPhoto: string | null;
+  errorStage: string | null;
+  errorNote: string | null;
 };
 
 // Arxivlash faqat dastlabki bosqichda (status zakasga o'tmaganda) mumkin.
@@ -59,6 +68,7 @@ type Group = {
   note: string | null;
   status: string;
   fileName: string | null;
+  paused: boolean;
   applicants: Applicant[];
 };
 
@@ -103,56 +113,6 @@ export default function GroupDetail({ group }: { group: Group }) {
     }
   }
 
-  async function monitorAction(action: "configure" | "pause" | "go" | "tick") {
-    try {
-      const body: Record<string, unknown> = { action };
-      if (action === "configure") {
-        const v = window.prompt(
-          "Slot vaqti (YYYY-MM-DD HH:MM):",
-          new Date(Date.now() + 30 * 60_000)
-            .toISOString()
-            .slice(0, 16)
-            .replace("T", " "),
-        );
-        if (!v) return;
-        const m = v.trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
-        if (!m) {
-          toast("Vaqt formati noto'g'ri", "error");
-          return;
-        }
-        const [, y, mo, d, h, mi] = m;
-        body.slotAt = new Date(
-          Number(y),
-          Number(mo) - 1,
-          Number(d),
-          Number(h),
-          Number(mi),
-          0,
-          0,
-        ).toISOString();
-      }
-
-      const res = await fetch("/api/slot-monitor", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data) throw new Error(data?.error ?? "Amal bajarilmadi");
-
-      if (action !== "tick") {
-        toast("Monitoring holati yangilandi");
-      }
-      await refreshMonitor();
-      if (action === "tick") router.refresh();
-    } catch (e) {
-      toast(
-        `Amal bajarilmadi: ${e instanceof Error ? e.message : "xato"}`,
-        "error",
-      );
-    }
-  }
-
   async function bookGroup(stage: "register" | "order") {
     setBusyId("group");
     try {
@@ -170,7 +130,9 @@ export default function GroupDetail({ group }: { group: Group }) {
           return;
         }
         if (data.queued) {
-          toast("Buyurtma navbatga qo'shildi (worker bajaradi)");
+          toast(
+            `Buyurtma navbatga qo'shildi: ${data.queuedJobs ?? 0} ta (worker bajaradi)`,
+          );
         } else {
           toast(data.note || "Buyurtma navbatga qo'shilmadi", "error");
         }
@@ -178,20 +140,15 @@ export default function GroupDetail({ group }: { group: Group }) {
         return;
       }
 
-      const action = stage === "register" ? "ro'yxatdan o'tkazish" : "buyurtma";
-      const failed: { name: string; passportNumber: string; note: string }[] =
-        data.failed ?? [];
-
-      if (failed.length === 0) {
-        toast(`Barchasi muvaffaqiyatli: ${data.succeeded} ta ${action}`);
-      } else {
-        const names = failed
-          .map((f) => f.name)
-          .slice(0, 5)
-          .join(", ");
-        const more = failed.length > 5 ? ` +${failed.length - 5}` : "";
+      // register — endi navbatga tushadi (worker'lar parallel bajaradi).
+      if (data.queued) {
         toast(
-          `${data.succeeded}/${data.processed} muvaffaqiyatli. Xato: ${names}${more}`,
+          `Ro'yxatdan o'tkazish navbatga qo'shildi: ${data.queuedJobs ?? 0} ta` +
+            (data.skippedJobs ? ` (skip: ${data.skippedJobs})` : ""),
+        );
+      } else {
+        toast(
+          data.note || "Ro'yxatdan o'tkazishga user qo'shilmadi",
           "error",
         );
       }
@@ -261,28 +218,21 @@ export default function GroupDetail({ group }: { group: Group }) {
     }
   }
 
-  async function toggleSlot(action: "open" | "close") {
+  async function togglePause() {
+    const next = !group.paused;
     setBusyId("group");
     try {
-      const body: { slot: string; closeAt?: string } = { slot: action };
-      if (action === "open") {
-        const mins = window.prompt(
-          "Slot necha daqiqadan keyin yopilsin? (bo'sh = qo'lda yopilguncha)",
-          "",
-        );
-        if (mins && Number(mins) > 0) {
-          body.closeAt = new Date(
-            Date.now() + Number(mins) * 60_000,
-          ).toISOString();
-        }
-      }
       const res = await fetch(`/api/groups/${group.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ paused: next }),
       });
       if (!res.ok) throw new Error();
-      toast(action === "open" ? "Slot ochildi" : "Slot yopildi");
+      toast(
+        next
+          ? "Guruh pauzaga qo'yildi — slot ochilsa ham bu guruh chetda qoladi"
+          : "Guruh pauzadan chiqarildi",
+      );
       router.refresh();
     } catch {
       toast("Amal bajarilmadi", "error");
@@ -355,18 +305,31 @@ export default function GroupDetail({ group }: { group: Group }) {
 
   useEffect(() => {
     refreshMonitor();
-    const id = window.setInterval(async () => {
-      if (monitor?.active) {
-        await monitorAction("tick");
-      } else {
-        await refreshMonitor();
-      }
-    }, 10_000);
+    const id = window.setInterval(refreshMonitor, 5_000);
     return () => window.clearInterval(id);
-  }, [monitor?.active]);
+  }, []);
 
   return (
     <div className="space-y-6">
+      {busyId === "group" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4 rounded-2xl bg-white px-10 py-8 shadow-2xl dark:bg-slate-900">
+            <span className="relative flex h-14 w-14">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-40" />
+              <span className="relative inline-flex h-14 w-14 animate-spin items-center justify-center rounded-full border-4 border-brand-100 border-t-brand-600" />
+            </span>
+            <div className="text-center">
+              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                Buyurtma yuborilmoqda...
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Worker'lar navbatni bajaryapti, kuting
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-brand-600 to-brand-700 text-white shadow-soft">
         <div className="flex flex-wrap items-start justify-between gap-6 p-6">
@@ -376,6 +339,11 @@ export default function GroupDetail({ group }: { group: Group }) {
               <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-medium backdrop-blur">
                 {meta.label}
               </span>
+              {group.paused && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-2.5 py-0.5 text-xs font-semibold text-amber-950">
+                  <Pause size={12} variant="Bold" /> Pauzada
+                </span>
+              )}
             </div>
             <p className="mt-1 text-sm text-white/70">
               {total} arizachi
@@ -403,6 +371,7 @@ export default function GroupDetail({ group }: { group: Group }) {
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/25 text-[11px] font-bold">
                 1
               </span>
+              <Profile2User size={17} variant="Bold" />
               Ro'yxatdan o'tkazish
             </button>
 
@@ -410,34 +379,13 @@ export default function GroupDetail({ group }: { group: Group }) {
               className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-brand-700 shadow-sm transition-all hover:bg-brand-50 active:scale-95 disabled:opacity-60"
               onClick={() => bookGroup("order")}
               disabled={busyId === "group"}
-              title="Barchasiga buyurtma berish"
+              title="Barchasiga buyurtma berish (slot ochiq bo'lsa)"
             >
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand-100 text-[11px] font-bold text-brand-700">
                 2
               </span>
-              {busyId === "group" ? "Yuborilyapti..." : "GO / Buyurtma"}
-            </button>
-
-            <button
-              className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2.5 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all hover:bg-white/25 active:scale-95"
-              onClick={() => monitorAction("configure")}
-              title="Global monitor vaqtini belgilash"
-            >
-              Monitor vaqti
-            </button>
-            <button
-              className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2.5 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all hover:bg-white/25 active:scale-95"
-              onClick={() => monitorAction("pause")}
-              title="Pause: slot ochilsa ham buyurtma berilmasin"
-            >
-              Pause
-            </button>
-            <button
-              className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2.5 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all hover:bg-white/25 active:scale-95"
-              onClick={() => monitorAction("go")}
-              title="GO: monitoringni davom ettirish"
-            >
-              Go
+              <Send2 size={17} variant="Bold" />
+              {busyId === "group" ? "Yuborilyapti..." : "Buyurtma (GO)"}
             </button>
 
             <div className="mx-1 h-7 w-px bg-white/20" />
@@ -450,14 +398,30 @@ export default function GroupDetail({ group }: { group: Group }) {
               <DocumentDownload size={18} />
             </a>
             <button
-              className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2.5 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all hover:bg-white/25 active:scale-95 disabled:opacity-60"
-              onClick={() =>
-                toggleSlot(group.status === "SLOT_OPEN" ? "close" : "open")
-              }
+              className={`inline-flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold ring-1 backdrop-blur transition-all active:scale-95 disabled:opacity-60 ${
+                group.paused
+                  ? "bg-amber-400 text-amber-950 ring-amber-300 hover:bg-amber-300"
+                  : "bg-white/15 text-white ring-white/25 hover:bg-white/25"
+              }`}
+              onClick={togglePause}
               disabled={busyId === "group"}
-              title="Slotni ochish/yopish"
+              title={
+                group.paused
+                  ? "Pauzadan chiqarish — slot ochilsa GO ga qo'shiladi"
+                  : "Pauzaga qo'yish — slot ochilsa ham GO ga qo'shilmaydi"
+              }
             >
-              {group.status === "SLOT_OPEN" ? "Slotni yopish" : "Slot ochish"}
+              {group.paused ? (
+                <>
+                  <Play size={17} variant="Bold" />
+                  Pauzadan chiqarish
+                </>
+              ) : (
+                <>
+                  <Pause size={17} variant="Bold" />
+                  Pauza
+                </>
+              )}
             </button>
             <button
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white ring-1 ring-white/25 transition-all hover:bg-white/20 active:scale-95"
@@ -539,7 +503,7 @@ export default function GroupDetail({ group }: { group: Group }) {
               <th className="px-4 py-3 font-medium">Familiya / Ism</th>
               <th className="px-4 py-3 font-medium">Pasport</th>
               <th className="px-4 py-3 font-medium">Tug'ilgan</th>
-              <th className="px-4 py-3 font-medium">Tizim email</th>
+              <th className="px-4 py-3 font-medium">Email / Parol</th>
               <th className="px-4 py-3 font-medium">To'liq</th>
               <th className="px-4 py-3 font-medium">Status</th>
               <th className="px-4 py-3 text-right font-medium">Amallar</th>
@@ -570,14 +534,13 @@ export default function GroupDetail({ group }: { group: Group }) {
                     {a.birthdate || "—"}
                   </td>
                   <td className="px-4 py-3">
-                    {a.generatedEmail ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-slate-600">
-                        <Sms size={14} className="text-brand-500" />
-                        {a.generatedEmail}
-                      </span>
-                    ) : (
-                      <span className="text-slate-300">—</span>
-                    )}
+                    <CredentialCell
+                      email={a.generatedEmail}
+                      password={
+                        a.generatedPassword ||
+                        buildPassword(a.name, a.surname, a.passportNumber)
+                      }
+                    />
                   </td>
                   <td className="px-4 py-3">
                     {a.complete ? (
@@ -595,7 +558,28 @@ export default function GroupDetail({ group }: { group: Group }) {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge status={a.status} />
+                    {a.status === "FAILED" && (a.errorStage || a.errorNote) ? (
+                      <div className="max-w-[240px] rounded-lg border border-rose-200 bg-rose-50/70 px-2.5 py-1.5 dark:border-rose-500/30 dark:bg-rose-500/10">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                          <CloseCircle size={13} variant="Bold" />
+                          {a.errorStage === "order"
+                            ? "Buyurtmada xato"
+                            : a.errorStage === "register"
+                            ? "Ro'yxatda xato"
+                            : "Xatolik"}
+                        </div>
+                        {a.errorNote && (
+                          <p
+                            className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-500 dark:text-slate-400"
+                            title={a.errorNote}
+                          >
+                            {a.errorNote}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <StatusBadge status={a.status} />
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1.5">
@@ -852,6 +836,7 @@ function EditModal({
           phone: form.phone,
           email: form.email,
           generatedEmail: form.generatedEmail,
+          category: form.category,
           subcategory: form.subcategory,
           appointmentRef: form.appointmentRef,
         }),
@@ -902,9 +887,9 @@ function EditModal({
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg px-2 py-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
           >
-            тЬХ
+            <CloseCircle size={22} />
           </button>
         </div>
 
@@ -970,7 +955,8 @@ function EditModal({
               onChange={(e) => set("generatedEmail", e.target.value)}
             />
           </div>
-          <Field label="Subkategoriya" value={form.subcategory ?? ""} onChange={(v) => set("subcategory", v)} />
+          <SelectField label="Kategoriya" value={form.category ?? ""} onChange={(v) => set("category", v)} options={CATEGORIES} placeholder="Kategoriyani tanlang" />
+          <SelectField label="Subkategoriya" value={form.subcategory ?? ""} onChange={(v) => set("subcategory", v)} options={SUBCATEGORIES} placeholder="Subkategoriyani tanlang" />
           <Field label="Appointment raqami" value={form.appointmentRef ?? ""} onChange={(v) => set("appointmentRef", v)} />
         </div>
 
@@ -1044,6 +1030,7 @@ type NewApplicant = {
   passportValidity: string;
   phone: string;
   email: string;
+  category: string;
   subcategory: string;
   generatedEmail: string;
 };
@@ -1058,6 +1045,7 @@ const EMPTY_APPLICANT: NewApplicant = {
   passportValidity: "",
   phone: "",
   email: "",
+  category: "",
   subcategory: "",
   generatedEmail: "",
 };
@@ -1158,9 +1146,9 @@ function AddModal({
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg px-2 py-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
           >
-            тЬХ
+            <CloseCircle size={22} />
           </button>
         </div>
 
@@ -1186,7 +1174,8 @@ function AddModal({
               set("generatedEmail", v);
             }}
           />
-          <Field label="Subkategoriya" value={form.subcategory} onChange={(v) => set("subcategory", v)} />
+          <SelectField label="Kategoriya" value={form.category} onChange={(v) => set("category", v)} options={CATEGORIES} placeholder="Kategoriyani tanlang" />
+          <SelectField label="Subkategoriya" value={form.subcategory} onChange={(v) => set("subcategory", v)} options={SUBCATEGORIES} placeholder="Subkategoriyani tanlang" />
         </div>
 
         {error && (

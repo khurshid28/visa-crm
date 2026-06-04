@@ -27,6 +27,7 @@ const EDITABLE = [
   "regDaysBefore",
   "groupLabel",
   "generatedEmail",
+  "generatedPassword",
   "appointmentRef",
   "resultNote",
 ] as const;
@@ -51,6 +52,30 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // Maydon tahrir qilingan bo'lsa, to'liqlikni qayta hisoblaymiz.
   const fieldEdited = EDITABLE.some((k) => k in body);
   const current = await prisma.applicant.findUnique({ where: { id } });
+
+  // Pasport seriyasi majburiy moslik: arizachida (masalan Exceldan) pasport
+  // raqami mavjud bo'lsa, yangi (skan qilingan) raqam undan farq qilsa —
+  // saqlashni rad etamiz. Bu frontenddagi tekshiruvni backendda mustahkamlaydi.
+  if ("passportNumber" in body && current?.passportNumber) {
+    const norm = (x: unknown) =>
+      String(x ?? "")
+        .replace(/[^a-z0-9]/gi, "")
+        .toUpperCase();
+    const incoming = norm(body.passportNumber);
+    const existing = norm(current.passportNumber);
+    if (incoming && existing && incoming !== existing) {
+      return NextResponse.json(
+        {
+          error: "Pasport raqami mos kelmadi",
+          message: `Bazadagi pasport (${current.passportNumber}) skan qilingan pasportdan (${body.passportNumber}) farq qiladi. O'zgartirishga ruxsat yo'q.`,
+          existing: current.passportNumber,
+          incoming: body.passportNumber,
+        },
+        { status: 409 },
+      );
+    }
+  }
+
   if (fieldEdited && current) {
     const merged = { ...current, ...data } as Record<string, unknown>;
     data.complete = REQUIRED_FIELDS.every(

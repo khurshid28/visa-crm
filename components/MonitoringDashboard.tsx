@@ -27,6 +27,9 @@ type LogRow = {
   ok: boolean;
   durationMs: number;
   note: string;
+  url: string;
+  finalUrl: string;
+  visitedUrls: string[];
   workerProfile: string;
   createdAt: string;
 };
@@ -256,6 +259,7 @@ export default function MonitoringDashboard() {
                 <th className="py-2 pr-3">Natija</th>
                 <th className="py-2 pr-3">Davomiyligi</th>
                 <th className="py-2 pr-3">Worker</th>
+                <th className="py-2 pr-3">URL</th>
                 <th className="py-2 pr-3">Izoh</th>
               </tr>
             </thead>
@@ -282,12 +286,36 @@ export default function MonitoringDashboard() {
                   </td>
                   <td className="py-2 pr-3 text-slate-600">{ms(l.durationMs)}</td>
                   <td className="py-2 pr-3 text-xs text-slate-500">{l.workerProfile || "—"}</td>
+                  <td className="py-2 pr-3 max-w-[16rem] text-xs">
+                    {l.finalUrl || l.url ? (
+                      <a
+                        href={l.finalUrl || l.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block truncate text-indigo-600 hover:underline dark:text-indigo-400"
+                        title={
+                          l.visitedUrls.length
+                            ? l.visitedUrls.join("\n")
+                            : l.finalUrl || l.url
+                        }
+                      >
+                        {l.finalUrl || l.url}
+                      </a>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                    {l.visitedUrls.length > 1 && (
+                      <span className="text-[10px] text-slate-400">
+                        {l.visitedUrls.length} ta sahifa
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 pr-3 max-w-xs truncate text-xs text-slate-500" title={l.note}>{l.note}</td>
                 </tr>
               ))}
               {data.logs.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-6 text-center text-sm text-slate-400">
+                  <td colSpan={9} className="py-6 text-center text-sm text-slate-400">
                     Hali log yo'q
                   </td>
                 </tr>

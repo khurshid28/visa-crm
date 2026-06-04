@@ -173,6 +173,11 @@ export async function GET() {
       ok: l.ok,
       durationMs: l.durationMs,
       note: l.note ?? "",
+      url: l.url ?? "",
+      finalUrl: l.finalUrl ?? "",
+      visitedUrls: l.visitedUrls
+        ? l.visitedUrls.split("\n").filter(Boolean)
+        : [],
       workerProfile: l.workerProfile ?? "",
       createdAt: l.createdAt.toISOString(),
     })),

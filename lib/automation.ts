@@ -32,7 +32,9 @@ export type AutomationResult = {
   ref: string | null; // sahifadan topilgan tasdiqlash/appointment raqami
   note: string; // qisqa natija izohi (resultNote uchun)
   filled: string[]; // to'ldirilgan maydonlar ro'yxati
-  url: string;
+  url: string; // boshlang'ich (target) URL
+  finalUrl: string; // urinish oxirida brauzer turgan URL
+  visitedUrls: string[]; // urinish davomida ochilgan barcha URL'lar (tartib bilan)
 };
 
 export type ActivationResult = {
@@ -240,11 +242,21 @@ export async function runBooking(
       note: `URL sozlanmagan (.env: BOOKING_${stage === "order" ? "ORDER" : "REGISTER"}_URL)`,
       filled: [],
       url: "",
+      finalUrl: "",
+      visitedUrls: [],
     };
   }
 
   let closeSession: (() => Promise<void>) | null = null;
   const filled: string[] = [];
+  const visitedUrls: string[] = [];
+
+  // Brauzer qaysi sahifaga o'tsa — tartib bilan yozib boramiz (takrorsiz).
+  const trackUrl = (u: string) => {
+    if (!u || u === "about:blank") return;
+    if (visitedUrls[visitedUrls.length - 1] === u) return;
+    visitedUrls.push(u);
+  };
 
   try {
     const profileKey =
@@ -254,7 +266,17 @@ export async function runBooking(
 
     const page = await session.context.newPage();
 
+    // Har bir navigatsiyani (redirect/yangi sahifa) kuzatamiz.
+    page.on("framenavigated", (frame) => {
+      try {
+        if (frame === page.mainFrame()) trackUrl(frame.url());
+      } catch {
+        /* ignore */
+      }
+    });
+
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    trackUrl(page.url());
 
     // Har bir maydonni topib to'ldiramiz.
     const values: Partial<Record<keyof AutomationApplicant, string>> = {
@@ -293,6 +315,10 @@ export async function runBooking(
         .catch(() => "")) || "";
     const ref = extractRef(bodyText);
 
+    // Brauzer yopishdan oldin oxirgi URL'ni olamiz.
+    const finalUrl = page.url();
+    trackUrl(finalUrl);
+
     await closeSession();
     closeSession = null;
 
@@ -302,7 +328,15 @@ export async function runBooking(
       (submitted ? ", forma yuborildi" : ", submit tugmasi topilmadi") +
       (ref ? `, ref: ${ref}` : "");
 
-    return { ok: filled.length > 0 || submitted, ref, note, filled, url };
+    return {
+      ok: filled.length > 0 || submitted,
+      ref,
+      note,
+      filled,
+      url,
+      finalUrl,
+      visitedUrls,
+    };
   } catch (err) {
     if (closeSession) await closeSession().catch(() => {});
     const msg = err instanceof Error ? err.message : String(err);
@@ -312,6 +346,8 @@ export async function runBooking(
       note: `Avtomatlashtirish xatosi: ${msg.slice(0, 200)}`,
       filled,
       url,
+      finalUrl: visitedUrls[visitedUrls.length - 1] || url,
+      visitedUrls,
     };
   }
 }

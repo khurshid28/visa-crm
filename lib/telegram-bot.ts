@@ -49,6 +49,7 @@ import {
   getSlotQueueStats,
   runSlotMonitorTick,
   setSlotMonitorState,
+  logSlotEvent,
 } from "./slot-monitor";
 import { readMrzFromImage } from "./passport-ocr";
 import { GROUP_STATUS, APPLICANT_STATUS } from "./status";
@@ -228,7 +229,7 @@ const HELP =
   "<b>5️⃣ Buyurtma berish</b>\n" +
   "/order <code>id</code> — 2-bosqich (avval saytda slot ochiqligini tekshiradi)\n\n" +
   "<b>🕒 Global monitoring</b>\n" +
-  "/monitor <code>2026-06-10 14:30</code> — slot vaqtidan -10/+10 daq oynada har 10 soniyada tekshiradi\n" +
+  "/monitor <code>2026-06-10 14:30</code> — slot vaqti oynasida har 5 soniyada tekshiradi\n" +
   "/pause — monitoringni to'xtatib turadi (slot ochilsa ham buyurtma yubormaydi)\n" +
   "/go — pause'dan chiqarib davom ettiradi\n\n" +
   "<b>6️⃣ PDF olish</b>\n" +
@@ -479,12 +480,18 @@ async function handleCommand(text: string): Promise<string> {
         active: true,
         paused: false,
         slotAt: slotAt.toISOString(),
+        openedAt: null,
         lastCheckAt: null,
-        lastMessage: "Monitoring ishga tushdi (har 10 soniya)",
+        lastMessage: "Monitoring ishga tushdi (har 5 soniya)",
+      });
+      await logSlotEvent("configure", {
+        slotAt: slotAt.toISOString(),
+        message: state.lastMessage,
+        source: "bot",
       });
       return (
         `✅ Monitoring yoqildi. Slot vaqti: <b>${esc(fmtDate(slotAt))}</b>\n` +
-        "Tizim -10/+10 daqiqa oynada har 10 soniyada slotni tekshiradi."
+        "Tizim slot oynasida har 5 soniyada slotni tekshiradi."
       );
     }
 
@@ -492,6 +499,11 @@ async function handleCommand(text: string): Promise<string> {
       const state = await setSlotMonitorState({
         paused: true,
         lastMessage: "PAUSE: slot monitoring vaqtincha to'xtadi",
+      });
+      await logSlotEvent("pause", {
+        slotAt: state.slotAt,
+        message: state.lastMessage,
+        source: "bot",
       });
       return `⏸ Pause yoqildi. Oxirgi holat: ${esc(state.lastMessage)}`;
     }
@@ -501,6 +513,11 @@ async function handleCommand(text: string): Promise<string> {
         paused: false,
         active: true,
         lastMessage: "GO: monitoring davom etadi",
+      });
+      await logSlotEvent("go", {
+        slotAt: state.slotAt,
+        message: state.lastMessage,
+        source: "bot",
       });
       return `▶️ GO. Monitoring davom etadi. Slot vaqti: ${state.slotAt ? esc(fmtDate(new Date(state.slotAt))) : "—"}`;
     }

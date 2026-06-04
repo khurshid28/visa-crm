@@ -8,6 +8,8 @@ import Pagination from "@/components/Pagination";
 import NameCell from "@/components/NameCell";
 import UserViewButton from "@/components/UserViewButton";
 import StatusBadge from "@/components/StatusBadge";
+import CredentialCell from "@/components/CredentialCell";
+import { buildPassword } from "@/lib/email";
 import { fmtDateTime } from "@/lib/date";
 export const dynamic = "force-dynamic";
 
@@ -97,7 +99,7 @@ export default async function UsersPage({
               <th>ID</th>
               <th>Familiya / Ism</th>
               <th>Pasport</th>
-              <th>Tizim email</th>
+              <th>Tizim email / Parol</th>
               <th>Guruh</th>
               <th>Status</th>
               <th>Sana</th>
@@ -128,9 +130,13 @@ export default async function UsersPage({
                     {a.passportNumber}
                   </td>
                   <td className="text-slate-600">
-                    {a.generatedEmail || (
-                      <span className="text-slate-300">—</span>
-                    )}
+                    <CredentialCell
+                      email={a.generatedEmail}
+                      password={
+                        a.generatedPassword ||
+                        buildPassword(a.name, a.surname, a.passportNumber)
+                      }
+                    />
                   </td>
                   <td>
                     {a.group ? (
@@ -168,6 +174,7 @@ export default async function UsersPage({
                         phone: a.phone ?? null,
                         email: a.email ?? null,
                         generatedEmail: a.generatedEmail ?? null,
+                        generatedPassword: a.generatedPassword ?? null,
                         subcategory: a.subcategory ?? null,
                         city: a.city ?? null,
                         category: a.category ?? null,

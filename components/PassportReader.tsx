@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Scan, TickCircle, Warning2, Gallery, Refresh } from "iconsax-react";
 import { parseMrz, type MrzResult } from "@/lib/mrz";
+import { normalizeNationality, countryLabel } from "@/lib/options";
 import PassportCropper, { type CropBox } from "@/components/PassportCropper";
 
 export type PassportFields = {
@@ -142,8 +143,8 @@ async function detectFaceBox(source: HTMLCanvasElement): Promise<CropBox> {
             a.boundingBox.width * a.boundingBox.height,
         )[0].boundingBox;
         // Yuz atrofiga bo'sh joy (passport foto uslubida).
-        const padX = f.width * 0.5;
-        const padTop = f.height * 0.5;
+        const padX = f.width * 0.45;
+        const padTop = f.height * 0.35;
         const padBot = f.height * 0.35;
         const x = Math.max(0, f.x - padX);
         const y = Math.max(0, f.y - padTop);
@@ -157,7 +158,7 @@ async function detectFaceBox(source: HTMLCanvasElement): Promise<CropBox> {
   }
 
   // TD3 (Uzbekiston) passport: foto chap tomonda, pastki yarmida.
-  return { x: 0.02, y: 0.32, w: 0.33, h: 0.52 };
+  return { x: 0.04, y: 0.52, w: 0.3, h: 0.4 };
 }
 
 export default function PassportReader({
@@ -165,7 +166,7 @@ export default function PassportReader({
   onImage,
   onPhoto,
 }: {
-  onFill: (f: PassportFields) => void;
+  onFill: (f: PassportFields) => boolean | void;
   onImage?: (file: File) => void;
   onPhoto?: (file: File) => void;
 }) {
@@ -178,17 +179,26 @@ export default function PassportReader({
   const [error, setError] = useState("");
 
   function apply(res: MrzResult) {
-    setResult(res);
-    setError("");
-    onFill({
+    const applied = onFill({
       surname: res.surname,
       name: res.name,
       passportNumber: res.passportNumber,
-      nationality: res.nationality,
+      nationality: normalizeNationality(res.nationality),
       birthdate: res.birthdate,
       gender: res.gender,
       passportValidity: res.passportValidity,
     });
+    // Ota komponent pasport mos kelmadi deb rad etsa — formani buzmaymiz.
+    if (applied === false) {
+      setResult(null);
+      setError(
+        `Pasport raqami mos kelmadi (skan: ${res.passportNumber || "—"}). Forma o'zgartirilmadi.`,
+      );
+      return false;
+    }
+    setResult(res);
+    setError("");
+    return true;
   }
 
   async function onImageFile(file: File) {
@@ -242,6 +252,26 @@ export default function PassportReader({
       const correctedCanvas = drawRotated(bitmap, bestRotation);
       const correctedFile = await canvasToFile(correctedCanvas, baseName);
       const correctedUrl = URL.createObjectURL(correctedFile);
+
+      if (!bestRes) {
+        setError(
+          "MRZ topilmadi. Rasm aniqroq (yaxshi yorug'lik) bo'lsin yoki pastdagi formani qo'lda to'ldiring.",
+        );
+        return;
+      }
+
+      // Pasport raqamini avval tekshiramiz. Mos kelmasa — rasm ham, kesilgan
+      // foto ham saqlanmaydi (preview/cropper ko'rsatilmaydi).
+      const matched = apply(bestRes);
+      if (!matched) {
+        URL.revokeObjectURL(correctedUrl);
+        setPreview(null);
+        setCorrectedSrc(null);
+        setCropBox(null);
+        return;
+      }
+
+      // Moslik bor — endi rasmni staged qilamiz va kesish UI'sini ko'rsatamiz.
       setPreview(correctedUrl);
       setCorrectedSrc(correctedUrl);
       onImage?.(correctedFile);
@@ -251,16 +281,8 @@ export default function PassportReader({
         const initial = await detectFaceBox(correctedCanvas);
         setCropBox(initial);
       } catch {
-        setCropBox({ x: 0.02, y: 0.32, w: 0.33, h: 0.52 });
+        setCropBox({ x: 0.04, y: 0.46, w: 0.3, h: 0.42 });
       }
-
-      if (!bestRes) {
-        setError(
-          "MRZ topilmadi. Rasm aniqroq (yaxshi yorug'lik) bo'lsin yoki pastdagi formani qo'lda to'ldiring.",
-        );
-        return;
-      }
-      apply(bestRes);
     } catch {
       setError("Rasmni o'qib bo'lmadi. Pastdagi formani qo'lda to'ldiring.");
     } finally {
@@ -359,7 +381,7 @@ export default function PassportReader({
             <span>Familiya: <b>{result.surname || "—"}</b></span>
             <span>Ism: <b>{result.name || "—"}</b></span>
             <span>Pasport: <b>{result.passportNumber || "—"}</b></span>
-            <span>Millat: <b>{result.nationality || "—"}</b></span>
+            <span>Millat: <b>{result.nationality ? countryLabel(normalizeNationality(result.nationality)) : "—"}</b></span>
             <span>Tug'ilgan: <b>{result.birthdate || "—"}</b></span>
             <span>Amal muddati: <b>{result.passportValidity || "—"}</b></span>
           </div>

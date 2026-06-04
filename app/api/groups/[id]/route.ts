@@ -36,6 +36,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json(group);
   }
 
+  // Guruh pauzasi — pauzada bo'lsa GO (buyurtma) navbatiga qo'shilmaydi.
+  if (typeof body.paused === "boolean") {
+    const group = await prisma.group.update({
+      where: { id },
+      data: { paused: body.paused },
+    });
+    return NextResponse.json(group);
+  }
+
   const data: Record<string, unknown> = {};
   if (typeof body.name === "string") data.name = body.name;
   if (typeof body.note === "string") data.note = body.note;

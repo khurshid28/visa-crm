@@ -19,7 +19,7 @@ import {
   missingFieldLabels,
   type ParsedApplicant,
 } from "./excel";
-import { buildEmail } from "./email";
+import { buildEmail, buildPassword } from "./email";
 import {
   dispatchGroupDocuments,
   isTelegramConfigured,
@@ -182,6 +182,11 @@ async function runStageWithRetry(
           ok,
           durationMs,
           note: `${result.note}${ok ? "" : ` (urinish ${attempt}/${limit})`}`,
+          url: result.url || null,
+          finalUrl: result.finalUrl || null,
+          visitedUrls: result.visitedUrls.length
+            ? result.visitedUrls.join("\n")
+            : null,
           workerProfile: workerProfile ?? null,
           startedAt,
           finishedAt,
@@ -320,6 +325,9 @@ async function processApplicant(
           ok: act.ok,
           durationMs: actEnd.getTime() - actStart.getTime(),
           note: act.note,
+          url: act.link ?? null,
+          finalUrl: act.link ?? null,
+          visitedUrls: act.link ?? null,
           workerProfile: workerProfile ?? null,
           startedAt: actStart,
           finishedAt: actEnd,
@@ -772,7 +780,10 @@ export async function importApplicantsToGroup(
     });
     await prisma.applicant.update({
       where: { id: created.id },
-      data: { generatedEmail: buildEmail(a.name, a.surname, created.id) },
+      data: {
+        generatedEmail: buildEmail(a.name, a.surname, created.id),
+        generatedPassword: buildPassword(a.name, a.surname, a.passportNumber),
+      },
     });
   }
 

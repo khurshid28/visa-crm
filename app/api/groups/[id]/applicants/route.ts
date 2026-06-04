@@ -16,6 +16,7 @@ const FIELDS = [
   "passportValidity",
   "phone",
   "email",
+  "category",
   "subcategory",
 ] as const;
 
@@ -57,6 +58,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       passportValidity: data.passportValidity,
       phone: data.phone,
       email: data.email,
+      category: data.category,
       subcategory: data.subcategory,
       groupId,
       complete,

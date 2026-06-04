@@ -8,6 +8,7 @@ import { fmtDateTime } from "@/lib/date";
 import UploadGroup from "@/components/UploadGroup";
 import ListControls from "@/components/ListControls";
 import Pagination from "@/components/Pagination";
+import SlotMonitorBar from "@/components/SlotMonitorBar";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,8 @@ export default async function GroupsPage({
         <UploadGroup />
       </div>
 
+      <SlotMonitorBar />
+
       <ListControls
         searchPlaceholder="Guruh nomi yoki fayl bo'yicha qidirish..."
         statusOptions={STATUS_OPTIONS}
@@ -80,7 +83,6 @@ export default async function GroupsPage({
               <th>ID</th>
               <th>Nomi</th>
               <th>Arizachilar</th>
-              <th>To'liq / Registered</th>
               <th>Status</th>
               <th>Sana</th>
               <th></th>
@@ -88,6 +90,7 @@ export default async function GroupsPage({
           </thead>
           <tbody>
             {groups.map((g) => {
+              const appCount = g._count.applicants;
               const complete = g.applicants.filter((a) => a.complete).length;
               const registered = g.applicants.filter(
                 (a) => a.status === "REGISTERED",
@@ -100,9 +103,22 @@ export default async function GroupsPage({
                     </span>
                   </td>
                   <td className="font-medium text-slate-800">{g.name}</td>
-                  <td>{g._count.applicants}</td>
                   <td>
-                    {complete} / {registered}
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-0.5 text-sm font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                        {appCount}
+                      </span>
+                      <span className="flex flex-col gap-0.5 text-[11px] leading-tight">
+                        <span className="inline-flex items-center gap-1 text-emerald-600">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                          {complete} to'liq
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-brand-600">
+                          <span className="h-1.5 w-1.5 rounded-full bg-brand-500" />
+                          {registered} registered
+                        </span>
+                      </span>
+                    </div>
                   </td>
                   <td>
                     <StatusBadge status={g.status} kind="group" />
@@ -124,7 +140,7 @@ export default async function GroupsPage({
             })}
             {groups.length === 0 && (
               <tr>
-                <td colSpan={7} className="py-10 text-center text-slate-400">
+                <td colSpan={6} className="py-10 text-center text-slate-400">
                   {q || status
                     ? "Filtrga mos guruh topilmadi"
                     : "Hali guruh yo'q. Yuqoridan Excel yuklang."}

@@ -13,10 +13,11 @@ import {
   Gallery,
   Edit2,
   ArrowLeft2,
+  Key,
 } from "iconsax-react";
 import { fullName } from "@/lib/name";
-import { buildEmail } from "@/lib/email";
-import { COUNTRIES, GENDERS } from "@/lib/options";
+import { buildEmail, buildPassword } from "@/lib/email";
+import { COUNTRIES, GENDERS, normalizeNationality, countryLabel } from "@/lib/options";
 import Select from "@/components/Select";
 import StatusBadge from "@/components/StatusBadge";
 import PassportReader, {
@@ -37,6 +38,7 @@ export type UserData = {
   phone: string | null;
   email: string | null;
   generatedEmail: string | null;
+  generatedPassword: string | null;
   subcategory: string | null;
   city: string | null;
   category: string | null;
@@ -96,7 +98,7 @@ export default function UserViewButton({ user }: { user: UserData }) {
         `Pasport mos kelmadi: ${form.passportNumber} ≠ skan ${p.passportNumber}`,
         "error",
       );
-      return;
+      return false;
     }
     setForm((f) => ({
       ...f,
@@ -109,6 +111,7 @@ export default function UserViewButton({ user }: { user: UserData }) {
       passportValidity: p.passportValidity || f.passportValidity,
     }));
     toast("Pasport o'qildi — forma to'ldirildi");
+    return true;
   }
 
   async function save() {
@@ -128,12 +131,17 @@ export default function UserViewButton({ user }: { user: UserData }) {
           phone: form.phone,
           email: form.email,
           generatedEmail: form.generatedEmail,
+          generatedPassword: form.generatedPassword,
           subcategory: form.subcategory,
           appointmentRef: form.appointmentRef,
         }),
       });
       if (!res.ok) {
-        toast("Saqlashda xatolik", "error");
+        const err = await res.json().catch(() => null);
+        toast(
+          err?.message || err?.error || "Saqlashda xatolik",
+          "error",
+        );
         return;
       }
       if (photoFile) {
@@ -272,9 +280,20 @@ export default function UserViewButton({ user }: { user: UserData }) {
               ) : (
                 <>
                   {user.generatedEmail && (
-                    <span className="mr-auto inline-flex items-center gap-1.5 text-xs text-slate-400">
-                      <Sms size={14} className="text-brand-500" />
-                      {user.generatedEmail}
+                    <span className="mr-auto inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Sms size={14} className="text-brand-500" />
+                        {user.generatedEmail}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Key size={14} className="text-amber-500" />
+                        {user.generatedPassword ||
+                          buildPassword(
+                            user.name,
+                            user.surname,
+                            user.passportNumber,
+                          )}
+                      </span>
                     </span>
                   )}
                   <button
@@ -416,10 +435,23 @@ function ViewBody({
         <Row label="Amal muddati" value={user.passportValidity} />
         <Row label="Tug'ilgan sana" value={user.birthdate} />
         <Row label="Jins" value={user.gender} />
-        <Row label="Millat" value={user.nationality} />
+        <Row
+          label="Millat"
+          value={
+            user.nationality
+              ? countryLabel(normalizeNationality(user.nationality))
+              : null
+          }
+        />
         <Row label="Telefon" value={user.phone} />
         <Row label="Tizim email" value={user.generatedEmail} />
-        <Row label="Email (Excel)" value={user.email} />
+        <Row
+          label="Tizim parol"
+          value={
+            user.generatedPassword ||
+            buildPassword(user.name, user.surname, user.passportNumber)
+          }
+        />
         <Row label="Toifa" value={user.category} />
         <Row label="Subkategoriya" value={user.subcategory} />
         <Row label="Shahar" value={user.city} />
@@ -447,7 +479,7 @@ function EditBody({
 }: {
   form: UserData;
   setField: <K extends keyof UserData>(key: K, value: UserData[K]) => void;
-  fillFromPassport: (p: PassportFields) => void;
+  fillFromPassport: (p: PassportFields) => boolean | void;
   setPhotoFile: (f: File | null) => void;
   setPersonPhoto: (f: File | null) => void;
   userId: number;
@@ -480,7 +512,7 @@ function EditBody({
         />
         <EditSelect
           label="Davlat (millat)"
-          value={form.nationality ?? ""}
+          value={normalizeNationality(form.nationality ?? "")}
           onChange={(v) => setField("nationality", v)}
           options={COUNTRIES}
           placeholder="Davlatni tanlang"
@@ -507,23 +539,22 @@ function EditBody({
           value={form.phone ?? ""}
           onChange={(v) => setField("phone", v)}
         />
-        <EditField
-          label="Email (Excel)"
-          value={form.email ?? ""}
-          onChange={(v) => setField("email", v)}
-        />
         <div>
           <div className="flex items-center justify-between">
             <label className="label">Tizim email</label>
             <button
               type="button"
               className="text-xs font-medium text-brand-600 hover:underline"
-              onClick={() =>
+              onClick={() => {
                 setField(
                   "generatedEmail",
                   buildEmail(form.name, form.surname, userId),
-                )
-              }
+                );
+                setField(
+                  "generatedPassword",
+                  buildPassword(form.name, form.surname, form.passportNumber),
+                );
+              }}
             >
               Generatsiya
             </button>
@@ -532,6 +563,28 @@ function EditBody({
             className="input"
             value={form.generatedEmail ?? ""}
             onChange={(e) => setField("generatedEmail", e.target.value)}
+          />
+        </div>
+        <div>
+          <div className="flex items-center justify-between">
+            <label className="label">Tizim parol</label>
+            <button
+              type="button"
+              className="text-xs font-medium text-brand-600 hover:underline"
+              onClick={() =>
+                setField(
+                  "generatedPassword",
+                  buildPassword(form.name, form.surname, form.passportNumber),
+                )
+              }
+            >
+              Generatsiya
+            </button>
+          </div>
+          <input
+            className="input"
+            value={form.generatedPassword ?? ""}
+            onChange={(e) => setField("generatedPassword", e.target.value)}
           />
         </div>
         <EditField
@@ -580,7 +633,7 @@ function EditSelect({
   label: string;
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; iso2?: string }[];
   placeholder?: string;
 }) {
   return (

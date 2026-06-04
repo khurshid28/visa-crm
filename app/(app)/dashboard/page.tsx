@@ -5,11 +5,15 @@ import {
   TickCircle,
   Flash,
   ArrowRight2,
+  ArrowUp,
+  ArrowDown,
+  Calendar,
 } from "iconsax-react";
 import { prisma } from "@/lib/prisma";
 import { APPLICANT_STATUS } from "@/lib/status";
 import { StatusDonut, GroupBars, LineChart } from "@/components/DashboardCharts";
 import StatusBadge from "@/components/StatusBadge";
+import { fmtDate } from "@/lib/date";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +37,28 @@ export default async function DashboardPage() {
       prisma.applicant.count({ where: { complete: true } }),
       prisma.applicant.groupBy({ by: ["status"], _count: true }),
     ]);
+
+  // Bu hafta vs o'tgan hafta (trend foizi uchun).
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 86400000);
+  const twoWeeksAgo = new Date(now.getTime() - 14 * 86400000);
+  const [thisWeek, lastWeek] = await Promise.all([
+    prisma.applicant.count({ where: { createdAt: { gte: weekAgo } } }),
+    prisma.applicant.count({
+      where: { createdAt: { gte: twoWeeksAgo, lt: weekAgo } },
+    }),
+  ]);
+  const weekTrend =
+    lastWeek === 0
+      ? thisWeek > 0
+        ? 100
+        : 0
+      : Math.round(((thisWeek - lastWeek) / lastWeek) * 100);
+
+  const completeRate =
+    applicantCount > 0 ? Math.round((complete / applicantCount) * 100) : 0;
+  const bookedRate =
+    applicantCount > 0 ? Math.round((booked / applicantCount) * 100) : 0;
 
   const recent = await prisma.group.findMany({
     orderBy: { createdAt: "desc" },
@@ -78,13 +104,19 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
-          Boshqaruv paneli
-        </h1>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          Umumiy ko'rsatkichlar va so'nggi guruhlar
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
+            Boshqaruv paneli
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Umumiy ko'rsatkichlar va so'nggi guruhlar
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-2 rounded-xl bg-white px-3.5 py-2 text-sm font-medium text-slate-600 shadow-soft ring-1 ring-slate-100 dark:bg-slate-900/60 dark:text-slate-300 dark:ring-slate-800">
+          <Calendar size={16} variant="Bold" className="text-brand-500" />
+          {fmtDate(now)}
+        </span>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -92,25 +124,30 @@ export default async function DashboardPage() {
           label="Guruhlar"
           value={groupCount}
           icon={<Profile2User size={22} variant="Bold" />}
-          tone="bg-brand-50 text-brand-600"
+          tone="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300"
+          hint="Jami yuklangan guruhlar"
         />
         <Stat
           label="Arizachilar"
           value={applicantCount}
           icon={<People size={22} variant="Bold" />}
-          tone="bg-sky-50 text-sky-600"
+          tone="bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300"
+          trend={weekTrend}
+          trendLabel="o'tgan haftaga"
         />
         <Stat
           label="To'liq ma'lumot"
           value={complete}
           icon={<TickCircle size={22} variant="Bold" />}
-          tone="bg-amber-50 text-amber-600"
+          tone="bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300"
+          progress={completeRate}
         />
         <Stat
           label="Band qilingan"
           value={booked}
           icon={<Flash size={22} variant="Bold" />}
-          tone="bg-emerald-50 text-emerald-600"
+          tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300"
+          progress={bookedRate}
           accent
         />
       </div>
@@ -156,21 +193,35 @@ export default async function DashboardPage() {
             <ArrowRight2 size={14} variant="Bold" />
           </Link>
         </div>
-        <div className="divide-y divide-slate-100">
+        <div className="divide-y divide-slate-100 dark:divide-slate-800">
           {recent.map((g) => {
             return (
               <Link
                 key={g.id}
                 href={`/groups/${g.id}`}
-                className="flex items-center justify-between py-3 transition hover:opacity-80"
+                className="group -mx-2 flex items-center justify-between gap-3 rounded-xl px-2 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-800/50"
               >
-                <div>
-                  <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{g.name}</p>
-                  <p className="text-xs text-slate-400">
-                    {g._count.applicants} arizachi
-                  </p>
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-100 to-brand-50 text-sm font-bold text-brand-700 ring-1 ring-brand-100 dark:from-brand-500/15 dark:to-brand-500/5 dark:text-brand-300 dark:ring-brand-500/20">
+                    {g.name?.[0]?.toUpperCase() ?? "G"}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-slate-800 dark:text-slate-100">
+                      {g.name}
+                    </p>
+                    <p className="flex items-center gap-1 text-xs text-slate-400">
+                      <People size={12} variant="Bold" className="text-slate-300" />
+                      {g._count.applicants} arizachi
+                    </p>
+                  </div>
                 </div>
-                <StatusBadge status={g.status} kind="group" />
+                <div className="flex shrink-0 items-center gap-2">
+                  <StatusBadge status={g.status} kind="group" />
+                  <ArrowRight2
+                    size={16}
+                    className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-brand-500"
+                  />
+                </div>
               </Link>
             );
           })}
@@ -191,30 +242,83 @@ function Stat({
   icon,
   tone,
   accent,
+  trend,
+  trendLabel,
+  progress,
+  hint,
 }: {
   label: string;
   value: number;
   icon: React.ReactNode;
   tone: string;
   accent?: boolean;
+  trend?: number;
+  trendLabel?: string;
+  progress?: number;
+  hint?: string;
 }) {
+  const up = (trend ?? 0) >= 0;
   return (
-    <div className="card flex items-center gap-4">
-      <div
-        className={`flex h-12 w-12 items-center justify-center rounded-xl ${tone}`}
-      >
-        {icon}
+    <div className="card group relative overflow-hidden transition-all hover:-translate-y-0.5 hover:shadow-lg">
+      <div className="flex items-start justify-between gap-3">
+        <div
+          className={`flex h-12 w-12 items-center justify-center rounded-xl transition-transform group-hover:scale-105 ${tone}`}
+        >
+          {icon}
+        </div>
+        {trend !== undefined && (
+          <span
+            className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold ${
+              up
+                ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
+                : "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400"
+            }`}
+          >
+            {up ? <ArrowUp size={12} variant="Bold" /> : <ArrowDown size={12} variant="Bold" />}
+            {Math.abs(trend)}%
+          </span>
+        )}
       </div>
-      <div>
+
+      <div className="mt-4">
         <p className="text-sm text-slate-500 dark:text-slate-400">{label}</p>
         <p
-          className={`text-2xl font-semibold ${
+          className={`mt-0.5 text-3xl font-bold tracking-tight ${
             accent ? "text-emerald-600" : "text-slate-900 dark:text-slate-100"
           }`}
         >
           {value}
         </p>
       </div>
+
+      {progress !== undefined && (
+        <div className="mt-3">
+          <div className="flex items-center justify-between text-[11px] text-slate-400">
+            <span>Ulush</span>
+            <span className="font-semibold text-slate-500 dark:text-slate-300">
+              {progress}%
+            </span>
+          </div>
+          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+            <div
+              className={`h-full rounded-full ${
+                accent
+                  ? "bg-gradient-to-r from-emerald-400 to-emerald-600"
+                  : "bg-gradient-to-r from-amber-400 to-amber-500"
+              }`}
+              style={{ width: `${progress}%`, transition: "width .7s ease" }}
+            />
+          </div>
+        </div>
+      )}
+
+      {trend !== undefined && trendLabel && (
+        <p className="mt-3 text-[11px] text-slate-400">
+          So'nggi 7 kun · {trendLabel}
+        </p>
+      )}
+
+      {hint && <p className="mt-3 text-[11px] text-slate-400">{hint}</p>}
     </div>
   );
 }

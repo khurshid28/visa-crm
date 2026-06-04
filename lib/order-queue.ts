@@ -271,7 +271,7 @@ export async function enqueueAllRegisteredGroups(
   source: "web" | "bot" | "system" = "system",
 ): Promise<EnqueueManyResult> {
   const applicants = await prisma.applicant.findMany({
-    where: { status: ApplicantStatus.REGISTERED },
+    where: { status: ApplicantStatus.REGISTERED, group: { paused: false } },
     select: { id: true, groupId: true },
   });
 

@@ -1,5 +1,3 @@
-import { promises as fs } from "fs";
-import path from "path";
 import { ApplicantStatus } from "@prisma/client";
 import { prisma } from "./prisma";
 import { checkSlotOpen } from "./automation";
@@ -8,11 +6,7 @@ import {
   enqueueStaleReRegisters,
 } from "./order-queue";
 
-const MONITOR_STATE_PATH = path.join(
-  process.cwd(),
-  "uploads",
-  "slot-monitor-state.json",
-);
+const MONITOR_ID = 1;
 
 export type SlotMonitorState = {
   active: boolean;
@@ -23,6 +17,31 @@ export type SlotMonitorState = {
   registerLeadMinutes: number;
   lastCheckAt: string | null;
   lastMessage: string;
+  openedAt: string | null;
+};
+
+export type SlotEventType =
+  | "configure"
+  | "open"
+  | "close"
+  | "pause"
+  | "go"
+  | "stop"
+  | "check"
+  | "expired";
+
+export type SlotEvent = {
+  id: number;
+  type: string;
+  slotAt: string | null;
+  closeAt: string | null;
+  message: string | null;
+  usersQueued: number;
+  usersDone: number;
+  durationSec: number | null;
+  source: string;
+  username: string | null;
+  createdAt: string;
 };
 
 export type SlotQueueStats = {
@@ -48,46 +67,46 @@ const DEFAULT_STATE: SlotMonitorState = {
   active: false,
   paused: false,
   slotAt: null,
-  intervalSeconds: 10,
-  windowMinutes: 10,
+  intervalSeconds: 5,
+  windowMinutes: 5,
   registerLeadMinutes: 5,
   lastCheckAt: null,
   lastMessage: "Monitoring to'xtagan",
+  openedAt: null,
 };
 
-async function ensureStateFile() {
-  await fs.mkdir(path.dirname(MONITOR_STATE_PATH), { recursive: true });
-  try {
-    await fs.access(MONITOR_STATE_PATH);
-  } catch {
-    await fs.writeFile(
-      MONITOR_STATE_PATH,
-      JSON.stringify(DEFAULT_STATE, null, 2),
-      "utf8",
-    );
-  }
+type MonitorRow = {
+  active: boolean;
+  paused: boolean;
+  slotAt: Date | null;
+  windowMinutes: number;
+  registerLeadMinutes: number;
+  lastCheckAt: Date | null;
+  lastMessage: string;
+  openedAt: Date | null;
+};
+
+function toState(row: MonitorRow): SlotMonitorState {
+  return {
+    active: row.active,
+    paused: row.paused,
+    slotAt: row.slotAt ? row.slotAt.toISOString() : null,
+    intervalSeconds: 5,
+    windowMinutes: row.windowMinutes,
+    registerLeadMinutes: row.registerLeadMinutes,
+    lastCheckAt: row.lastCheckAt ? row.lastCheckAt.toISOString() : null,
+    lastMessage: row.lastMessage,
+    openedAt: row.openedAt ? row.openedAt.toISOString() : null,
+  };
 }
 
 async function readState(): Promise<SlotMonitorState> {
-  await ensureStateFile();
-  try {
-    const raw = await fs.readFile(MONITOR_STATE_PATH, "utf8");
-    const parsed = JSON.parse(raw) as Partial<SlotMonitorState>;
-    return {
-      ...DEFAULT_STATE,
-      ...parsed,
-      intervalSeconds: 10,
-      windowMinutes: 10,
-      registerLeadMinutes: 5,
-    };
-  } catch {
-    return { ...DEFAULT_STATE };
-  }
-}
-
-async function writeState(next: SlotMonitorState) {
-  await ensureStateFile();
-  await fs.writeFile(MONITOR_STATE_PATH, JSON.stringify(next, null, 2), "utf8");
+  const row = await prisma.slotMonitor.upsert({
+    where: { id: MONITOR_ID },
+    create: { id: MONITOR_ID },
+    update: {},
+  });
+  return toState(row as MonitorRow);
 }
 
 export async function getSlotQueueStats(): Promise<SlotQueueStats> {
@@ -118,20 +137,102 @@ export async function setSlotMonitorState(
   patch: Partial<
     Pick<
       SlotMonitorState,
-      "active" | "paused" | "slotAt" | "lastMessage" | "lastCheckAt"
+      | "active"
+      | "paused"
+      | "slotAt"
+      | "windowMinutes"
+      | "lastMessage"
+      | "lastCheckAt"
+      | "openedAt"
     >
   >,
 ): Promise<SlotMonitorState> {
-  const current = await readState();
-  const next: SlotMonitorState = {
-    ...current,
-    ...patch,
-    intervalSeconds: 10,
-    windowMinutes: 10,
-    registerLeadMinutes: 5,
-  };
-  await writeState(next);
-  return next;
+  const data: Record<string, unknown> = {};
+  if (patch.active !== undefined) data.active = patch.active;
+  if (patch.paused !== undefined) data.paused = patch.paused;
+  if (patch.slotAt !== undefined)
+    data.slotAt = patch.slotAt ? new Date(patch.slotAt) : null;
+  if (patch.windowMinutes !== undefined)
+    data.windowMinutes = patch.windowMinutes;
+  if (patch.lastMessage !== undefined) data.lastMessage = patch.lastMessage;
+  if (patch.lastCheckAt !== undefined)
+    data.lastCheckAt = patch.lastCheckAt ? new Date(patch.lastCheckAt) : null;
+  if (patch.openedAt !== undefined)
+    data.openedAt = patch.openedAt ? new Date(patch.openedAt) : null;
+
+  const row = await prisma.slotMonitor.upsert({
+    where: { id: MONITOR_ID },
+    create: { id: MONITOR_ID, ...data },
+    update: data,
+  });
+  return toState(row as MonitorRow);
+}
+
+// Slot voqeasini tarixga yozadi (kim/qachon/qanday o'zgardi, nechta user o'tdi).
+export async function logSlotEvent(
+  type: SlotEventType,
+  data: {
+    slotAt?: string | Date | null;
+    closeAt?: string | Date | null;
+    message?: string | null;
+    usersQueued?: number;
+    usersDone?: number;
+    durationSec?: number | null;
+    source?: "web" | "bot" | "system";
+    username?: string | null;
+  } = {},
+): Promise<void> {
+  try {
+    await prisma.slotEvent.create({
+      data: {
+        type,
+        slotAt: data.slotAt ? new Date(data.slotAt) : null,
+        closeAt: data.closeAt ? new Date(data.closeAt) : null,
+        message: data.message ?? null,
+        usersQueued: data.usersQueued ?? 0,
+        usersDone: data.usersDone ?? 0,
+        durationSec: data.durationSec ?? null,
+        source: data.source ?? "system",
+        username: data.username ?? null,
+      },
+    });
+  } catch {
+    // Log yozilmasa ham asosiy oqim buzilmasin.
+  }
+}
+
+export async function getSlotEvents(limit = 30): Promise<SlotEvent[]> {
+  const rows = await prisma.slotEvent.findMany({
+    orderBy: { createdAt: "desc" },
+    take: Math.min(Math.max(limit, 1), 100),
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    slotAt: r.slotAt ? r.slotAt.toISOString() : null,
+    closeAt: r.closeAt ? r.closeAt.toISOString() : null,
+    message: r.message,
+    usersQueued: r.usersQueued,
+    usersDone: r.usersDone,
+    durationSec: r.durationSec,
+    source: r.source,
+    username: r.username,
+    createdAt: r.createdAt.toISOString(),
+  }));
+}
+
+// Qolgan daqiqalarni o'zbekcha o'qiladigan ko'rinishga keltiradi:
+// 8685 -> "6 kun 0 soat 45 daq", 95 -> "1 soat 35 daq", 7 -> "7 daq".
+function fmtRemaining(totalMin: number): string {
+  const m = Math.max(0, Math.round(totalMin));
+  const days = Math.floor(m / 1440);
+  const hours = Math.floor((m % 1440) / 60);
+  const mins = m % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days} kun`);
+  if (hours > 0 || days > 0) parts.push(`${hours} soat`);
+  parts.push(`${mins} daq`);
+  return parts.join(" ");
 }
 
 export async function runSlotMonitorTick(): Promise<SlotTickResult> {
@@ -190,7 +291,7 @@ export async function runSlotMonitorTick(): Promise<SlotTickResult> {
     const mins = Math.ceil((leadStart - now.getTime()) / 60_000);
     const next = await setSlotMonitorState({
       lastCheckAt: now.toISOString(),
-      lastMessage: `Slot tekshiruvi hali boshlanmadi (${mins} daq qoldi)`,
+      lastMessage: `Slot tekshiruvi hali boshlanmadi (${fmtRemaining(mins)} qoldi)`,
     });
     return {
       state: next,
@@ -222,10 +323,22 @@ export async function runSlotMonitorTick(): Promise<SlotTickResult> {
   }
 
   if (now.getTime() > end) {
+    const durationSec = current.openedAt
+      ? Math.round(
+          (now.getTime() - new Date(current.openedAt).getTime()) / 1000,
+        )
+      : null;
     const next = await setSlotMonitorState({
       active: false,
+      openedAt: null,
       lastCheckAt: now.toISOString(),
       lastMessage: "Slot oynasi tugadi (+10 daqiqa) — monitoring to'xtadi",
+    });
+    await logSlotEvent("expired", {
+      slotAt: current.slotAt,
+      message: next.lastMessage,
+      durationSec,
+      source: "system",
     });
     return {
       state: next,
@@ -254,10 +367,17 @@ export async function runSlotMonitorTick(): Promise<SlotTickResult> {
   const queued = await enqueueAllRegisteredGroups("system");
   const next = await setSlotMonitorState({
     active: false,
+    openedAt: now.toISOString(),
     lastCheckAt: now.toISOString(),
     lastMessage:
       `Slot ochildi: ${queued.queuedJobs} user order queue'ga yuborildi ` +
       `(skip: ${queued.skippedJobs})`,
+  });
+  await logSlotEvent("open", {
+    slotAt: current.slotAt,
+    message: next.lastMessage,
+    usersQueued: queued.queuedJobs,
+    source: "system",
   });
 
   return {
