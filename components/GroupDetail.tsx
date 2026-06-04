@@ -27,6 +27,8 @@ import { GENDERS, COUNTRIES, DEFAULT_COUNTRY } from "@/lib/options";
 import PassportReader, { type PassportFields } from "@/components/PassportReader";
 import NameCell from "@/components/NameCell";
 import Select from "@/components/Select";
+import StatusBadge from "@/components/StatusBadge";
+import { fmtDateTime } from "@/lib/date";
 import { useToast } from "@/components/Toast";
 
 type Applicant = {
@@ -481,7 +483,7 @@ export default function GroupDetail({ group }: { group: Group }) {
             : ""}
           {monitor?.paused ? " · STATUS: PAUSE" : ""}
           {monitor?.active && monitor?.slotAt
-            ? ` · Slot vaqti: ${new Date(monitor.slotAt).toLocaleString("uz-UZ")}`
+            ? ` · Slot vaqti: ${fmtDateTime(monitor.slotAt)}`
             : ""}
         </div>
       </div>
@@ -545,10 +547,6 @@ export default function GroupDetail({ group }: { group: Group }) {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {paged.map((a, i) => {
-              const s = APPLICANT_STATUS[a.status] ?? {
-                label: a.status,
-                cls: "bg-slate-100 text-slate-700",
-              };
               const archived = a.status === "ARCHIVED";
               return (
                 <tr
@@ -561,7 +559,7 @@ export default function GroupDetail({ group }: { group: Group }) {
                     {(safePage - 1) * PER_PAGE + i + 1}
                   </td>
                   <td className="px-4 py-3">
-                    <NameCell surname={a.surname} name={a.name} />
+                    <NameCell surname={a.surname} name={a.name} phone={a.phone} />
                     {a.subcategory && (
                       <p className="text-xs text-slate-400">{a.subcategory}</p>
                     )}
@@ -569,7 +567,7 @@ export default function GroupDetail({ group }: { group: Group }) {
                     {a.passportNumber}
                   </td>
                   <td className="px-4 py-3 text-slate-600">
-                    {a.birthdate || "тАФ"}
+                    {a.birthdate || "—"}
                   </td>
                   <td className="px-4 py-3">
                     {a.generatedEmail ? (
@@ -578,7 +576,7 @@ export default function GroupDetail({ group }: { group: Group }) {
                         {a.generatedEmail}
                       </span>
                     ) : (
-                      <span className="text-slate-300">тАФ</span>
+                      <span className="text-slate-300">—</span>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -597,7 +595,7 @@ export default function GroupDetail({ group }: { group: Group }) {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`badge ${s.cls}`}>{s.label}</span>
+                    <StatusBadge status={a.status} />
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1.5">
@@ -709,7 +707,7 @@ export default function GroupDetail({ group }: { group: Group }) {
                     <span key={p} className="flex items-center">
                       {gap && (
                         <span className="px-1.5 text-sm text-slate-400">
-                          тАж
+                          …
                         </span>
                       )}
                       <button
@@ -812,14 +810,14 @@ function EditModal({
   }
 
   function fillFromPassport(p: PassportFields) {
-    // Excel'dagi pasport bilan solishtiramiz. Mos kelmasa тАФ formani
+    // Excel'dagi pasport bilan solishtiramiz. Mos kelmasa — formani
     // o'zgartirmaymiz va ogohlantiramiz (boshqa odamning passporti bo'lishi mumkin).
     const norm = (s: string) => (s || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
     const scanned = norm(p.passportNumber);
     const existing = norm(applicant.passportNumber);
     if (existing && scanned && scanned !== existing) {
       toast(
-        `Pasport mos kelmadi: Excel ${applicant.passportNumber} тЙа skan ${p.passportNumber}`,
+        `Pasport mos kelmadi: Excel ${applicant.passportNumber} ≠ skan ${p.passportNumber}`,
         "error",
       );
       return;
@@ -834,7 +832,7 @@ function EditModal({
       gender: p.gender || f.gender,
       passportValidity: p.passportValidity || f.passportValidity,
     }));
-    toast("Pasport mos keldi тАФ forma to'ldirildi");
+    toast("Pasport mos keldi — forma to'ldirildi");
   }
 
   async function save() {
@@ -871,7 +869,7 @@ function EditModal({
           body: fd,
         });
       }
-      // Standartlashtirilgan portret (600x600 JPEG) тАФ shaxs bazasiga.
+      // Standartlashtirilgan portret (600x600 JPEG) — shaxs bazasiga.
       if (personPhoto) {
         const fd = new FormData();
         fd.append("file", personPhoto);
@@ -899,7 +897,7 @@ function EditModal({
               Arizachini tahrirlash
             </h3>
             <p className="text-xs text-slate-400">
-              Status tizim tomonidan boshqariladi тАФ bu yerda faqat ma'lumotlar.
+              Status tizim tomonidan boshqariladi — bu yerda faqat ma'lumotlar.
             </p>
           </div>
           <button

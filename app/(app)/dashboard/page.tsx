@@ -7,8 +7,9 @@ import {
   ArrowRight2,
 } from "iconsax-react";
 import { prisma } from "@/lib/prisma";
-import { GROUP_STATUS, APPLICANT_STATUS } from "@/lib/status";
+import { APPLICANT_STATUS } from "@/lib/status";
 import { StatusDonut, GroupBars, LineChart } from "@/components/DashboardCharts";
+import StatusBadge from "@/components/StatusBadge";
 
 export const dynamic = "force-dynamic";
 
@@ -78,10 +79,10 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900">
+        <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
           Boshqaruv paneli
         </h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Umumiy ko'rsatkichlar va so'nggi guruhlar
         </p>
       </div>
@@ -117,13 +118,13 @@ export default async function DashboardPage() {
       {/* Charts */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="card">
-          <h2 className="mb-5 text-sm font-semibold text-slate-700">
+          <h2 className="mb-5 text-sm font-semibold text-slate-700 dark:text-slate-200">
             Status taqsimoti
           </h2>
           <StatusDonut data={donutData} />
         </div>
         <div className="card">
-          <h2 className="mb-5 text-sm font-semibold text-slate-700">
+          <h2 className="mb-5 text-sm font-semibold text-slate-700 dark:text-slate-200">
             Guruhlar bo'yicha arizachilar
           </h2>
           <GroupBars data={barData} />
@@ -131,7 +132,7 @@ export default async function DashboardPage() {
       </div>
 
       <div className="card">
-        <h2 className="mb-4 text-sm font-semibold text-slate-700">
+        <h2 className="mb-4 text-sm font-semibold text-slate-700 dark:text-slate-200">
           So'nggi 7 kun — yangi arizachilar
         </h2>
         <LineChart
@@ -144,7 +145,7 @@ export default async function DashboardPage() {
 
       <div className="card">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-700">
+          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
             So'nggi guruhlar
           </h2>
           <Link
@@ -157,7 +158,6 @@ export default async function DashboardPage() {
         </div>
         <div className="divide-y divide-slate-100">
           {recent.map((g) => {
-            const meta = GROUP_STATUS[g.status];
             return (
               <Link
                 key={g.id}
@@ -165,12 +165,12 @@ export default async function DashboardPage() {
                 className="flex items-center justify-between py-3 transition hover:opacity-80"
               >
                 <div>
-                  <p className="text-sm font-medium text-slate-800">{g.name}</p>
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{g.name}</p>
                   <p className="text-xs text-slate-400">
                     {g._count.applicants} arizachi
                   </p>
                 </div>
-                <span className={`badge ${meta.cls}`}>{meta.label}</span>
+                <StatusBadge status={g.status} kind="group" />
               </Link>
             );
           })}
@@ -206,10 +206,10 @@ function Stat({
         {icon}
       </div>
       <div>
-        <p className="text-sm text-slate-500">{label}</p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">{label}</p>
         <p
           className={`text-2xl font-semibold ${
-            accent ? "text-emerald-600" : "text-slate-900"
+            accent ? "text-emerald-600" : "text-slate-900 dark:text-slate-100"
           }`}
         >
           {value}

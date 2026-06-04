@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { Lock1, User, Eye, EyeSlash, ArrowRight } from "iconsax-react";
 import { useToast } from "@/components/Toast";
 
@@ -58,8 +59,16 @@ export default function LoginPage() {
 
       <div className="relative z-10 w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="animate-float mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-3xl font-bold text-white shadow-2xl shadow-brand-600/40 ring-1 ring-white/20">
-            V
+          <div className="animate-float mx-auto mb-5 flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-2xl shadow-brand-600/40 ring-1 ring-white/20">
+            <Image
+              src="/logo.png"
+              alt="Visa CRM"
+              width={80}
+              height={80}
+              className="h-full w-full object-contain"
+              priority
+              unoptimized
+            />
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-white">
             Visa CRM

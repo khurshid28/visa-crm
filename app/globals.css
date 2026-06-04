@@ -3,7 +3,14 @@
 @tailwind utilities;
 
 :root {
-  --bg: #f5f7fb;
+  --bg: #f4f6fb;
+  --bg-soft: #ffffff;
+}
+
+.dark {
+  --bg: #0a0f1c;
+  --bg-soft: #0f1626;
+  color-scheme: dark;
 }
 
 html,
@@ -12,9 +19,38 @@ body {
 }
 
 body {
-  background: var(--bg);
+  background:
+    radial-gradient(
+      1200px 600px at 100% -10%,
+      rgb(53 99 255 / 0.06),
+      transparent 60%
+    ),
+    radial-gradient(
+      1000px 500px at -10% 10%,
+      rgb(139 92 246 / 0.05),
+      transparent 55%
+    ),
+    var(--bg);
+  background-attachment: fixed;
   color: #0f172a;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv11", "ss01";
+}
+.dark body {
+  color: #e2e8f0;
+  background:
+    radial-gradient(
+      1200px 600px at 100% -10%,
+      rgb(53 99 255 / 0.12),
+      transparent 60%
+    ),
+    radial-gradient(
+      1000px 500px at -10% 10%,
+      rgb(139 92 246 / 0.1),
+      transparent 55%
+    ),
+    var(--bg);
 }
 
 /* Subtle scrollbar */
@@ -31,6 +67,58 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
   background-clip: content-box;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+  background-clip: content-box;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+  background-clip: content-box;
+}
+
+/* ============================================================
+   Dark-mode remap for common inline utilities used across pages.
+   @apply'd component classes (.card, .table-base...) are unaffected
+   because they don't expose the literal utility class on elements.
+   ============================================================ */
+.dark .bg-white {
+  background-color: #0f1626;
+}
+.dark .bg-slate-50,
+.dark .bg-slate-50\/80,
+.dark .bg-slate-100 {
+  background-color: #182234;
+}
+.dark .text-slate-900 {
+  color: #f1f5f9;
+}
+.dark .text-slate-800 {
+  color: #e8edf6;
+}
+.dark .text-slate-700 {
+  color: #cdd7e6;
+}
+.dark .text-slate-600 {
+  color: #b4c0d4;
+}
+.dark .text-slate-500 {
+  color: #93a1b8;
+}
+.dark .text-slate-400 {
+  color: #6b7890;
+}
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-200\/80 {
+  border-color: #1f2a3d;
+}
+.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #1f2a3d;
+}
+.dark .ring-slate-100,
+.dark .ring-slate-200 {
+  --tw-ring-color: #1f2a3d;
 }
 
 @keyframes fadeIn {
@@ -96,7 +184,7 @@ body {
     @apply btn bg-brand-600 text-white shadow-sm hover:bg-brand-700 hover:shadow;
   }
   .btn-ghost {
-    @apply btn bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50;
+    @apply btn bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800/60 dark:text-slate-200 dark:ring-slate-700 dark:hover:bg-slate-700/60;
   }
   .btn-danger {
     @apply btn bg-red-600 text-white shadow-sm hover:bg-red-700;
@@ -106,56 +194,56 @@ body {
     @apply inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm ring-1 transition-all hover:-translate-y-0.5 hover:shadow active:translate-y-0 disabled:opacity-50 disabled:hover:translate-y-0;
   }
   .pill-indigo {
-    @apply pill bg-indigo-50 text-indigo-700 ring-indigo-100 hover:bg-indigo-100;
+    @apply pill bg-indigo-50 text-indigo-700 ring-indigo-100 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-300 dark:ring-indigo-500/20 dark:hover:bg-indigo-500/20;
   }
   .pill-violet {
-    @apply pill bg-violet-50 text-violet-700 ring-violet-100 hover:bg-violet-100;
+    @apply pill bg-violet-50 text-violet-700 ring-violet-100 hover:bg-violet-100 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-500/20 dark:hover:bg-violet-500/20;
   }
   .pill-emerald {
-    @apply pill bg-emerald-50 text-emerald-700 ring-emerald-100 hover:bg-emerald-100;
+    @apply pill bg-emerald-50 text-emerald-700 ring-emerald-100 hover:bg-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20 dark:hover:bg-emerald-500/20;
   }
   /* Icon-only round button */
   .icon-btn {
-    @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 ring-1 ring-transparent transition-all hover:bg-slate-100 hover:text-slate-700 hover:ring-slate-200 active:scale-95;
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 ring-1 ring-transparent transition-all hover:bg-slate-100 hover:text-slate-700 hover:ring-slate-200 active:scale-95 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200 dark:hover:ring-slate-700;
   }
   .card {
-    @apply rounded-2xl bg-white p-6 shadow-soft ring-1 ring-slate-100;
+    @apply rounded-2xl bg-white p-6 shadow-soft ring-1 ring-slate-100 dark:bg-slate-900/60 dark:ring-slate-800 dark:shadow-none dark:backdrop-blur;
   }
   .input {
-    @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100;
+    @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-100 dark:placeholder-slate-500 dark:focus:border-brand-500 dark:focus:ring-brand-500/20;
   }
   .label {
-    @apply mb-1 block text-xs font-medium text-slate-500;
+    @apply mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400;
   }
   .badge {
     @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
   }
   /* Tables */
   .table-wrap {
-    @apply overflow-x-auto rounded-2xl bg-white shadow-soft ring-1 ring-slate-100;
+    @apply overflow-x-auto rounded-2xl bg-white shadow-soft ring-1 ring-slate-100 dark:bg-slate-900/60 dark:ring-slate-800 dark:shadow-none;
   }
   .table-base {
     @apply w-full text-left text-sm;
   }
   .table-base thead {
-    @apply bg-slate-50/80 text-[11px] uppercase tracking-wide text-slate-400;
+    @apply bg-slate-50/80 text-[11px] uppercase tracking-wide text-slate-400 dark:bg-slate-800/40 dark:text-slate-500;
   }
   .table-base thead th {
     @apply px-5 py-3 font-semibold;
   }
   .table-base tbody tr {
-    @apply border-t border-slate-100 transition-colors hover:bg-brand-50/40;
+    @apply border-t border-slate-100 transition-colors hover:bg-brand-50/40 dark:border-slate-800 dark:hover:bg-slate-800/40;
   }
   .table-base tbody td {
-    @apply px-5 py-3.5 text-slate-600;
+    @apply px-5 py-3.5 text-slate-600 dark:text-slate-300;
   }
   /* Modal */
   .modal-backdrop {
-    @apply fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm;
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm dark:bg-black/60;
     animation: fadeIn 0.15s ease;
   }
   .modal-panel {
-    @apply max-h-[90vh] w-full overflow-y-auto rounded-2xl bg-white shadow-soft ring-1 ring-slate-100;
+    @apply max-h-[90vh] w-full overflow-y-auto rounded-2xl bg-white shadow-soft ring-1 ring-slate-100 dark:bg-slate-900 dark:ring-slate-800;
     animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
 }

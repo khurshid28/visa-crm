@@ -3,6 +3,8 @@ import { ArrowRight2 } from "iconsax-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { GROUP_STATUS, GROUP_STATUS_KEYS } from "@/lib/status";
+import StatusBadge from "@/components/StatusBadge";
+import { fmtDateTime } from "@/lib/date";
 import UploadGroup from "@/components/UploadGroup";
 import ListControls from "@/components/ListControls";
 import Pagination from "@/components/Pagination";
@@ -75,6 +77,7 @@ export default async function GroupsPage({
         <table className="table-base">
           <thead>
             <tr>
+              <th>ID</th>
               <th>Nomi</th>
               <th>Arizachilar</th>
               <th>To'liq / Registered</th>
@@ -85,23 +88,27 @@ export default async function GroupsPage({
           </thead>
           <tbody>
             {groups.map((g) => {
-              const meta = GROUP_STATUS[g.status];
               const complete = g.applicants.filter((a) => a.complete).length;
               const registered = g.applicants.filter(
                 (a) => a.status === "REGISTERED",
               ).length;
               return (
                 <tr key={g.id}>
+                  <td>
+                    <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      #{g.id}
+                    </span>
+                  </td>
                   <td className="font-medium text-slate-800">{g.name}</td>
                   <td>{g._count.applicants}</td>
                   <td>
                     {complete} / {registered}
                   </td>
                   <td>
-                    <span className={`badge ${meta.cls}`}>{meta.label}</span>
+                    <StatusBadge status={g.status} kind="group" />
                   </td>
-                  <td className="text-slate-400">
-                    {new Date(g.createdAt).toLocaleDateString("uz")}
+                  <td className="whitespace-nowrap text-slate-400">
+                    {fmtDateTime(g.createdAt)}
                   </td>
                   <td className="text-right">
                     <Link
@@ -117,7 +124,7 @@ export default async function GroupsPage({
             })}
             {groups.length === 0 && (
               <tr>
-                <td colSpan={6} className="py-10 text-center text-slate-400">
+                <td colSpan={7} className="py-10 text-center text-slate-400">
                   {q || status
                     ? "Filtrga mos guruh topilmadi"
                     : "Hali guruh yo'q. Yuqoridan Excel yuklang."}

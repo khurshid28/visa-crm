@@ -7,6 +7,8 @@ import ListControls from "@/components/ListControls";
 import Pagination from "@/components/Pagination";
 import NameCell from "@/components/NameCell";
 import UserViewButton from "@/components/UserViewButton";
+import StatusBadge from "@/components/StatusBadge";
+import { fmtDateTime } from "@/lib/date";
 export const dynamic = "force-dynamic";
 
 const PER_PAGE = 15;
@@ -54,6 +56,24 @@ export default async function UsersPage({
 
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
+  // Standart (person) rasm bor personId'larni blob yuklamasdan aniqlaymiz.
+  const personIds = applicants
+    .map((a) => a.personId)
+    .filter((x): x is number => x != null);
+  const withPersonPhoto = personIds.length
+    ? new Set(
+        (
+          await prisma.person.findMany({
+            where: { id: { in: personIds }, photo: { not: null } },
+            select: { id: true },
+          })
+        ).map((p) => p.id),
+      )
+    : new Set<number>();
+
+  // PDF tayyor deb hisoblanadigan statuslar.
+  const PDF_STATUSES = ["ORDERED", "BOOKED"];
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -74,31 +94,34 @@ export default async function UsersPage({
         <table className="table-base">
           <thead>
             <tr>
+              <th>ID</th>
               <th>Familiya / Ism</th>
               <th>Pasport</th>
               <th>Tizim email</th>
               <th>Guruh</th>
               <th>Status</th>
+              <th>Sana</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {applicants.map((a) => {
-              const s = APPLICANT_STATUS[a.status] ?? {
-                label: a.status,
-                cls: "bg-slate-100 text-slate-700",
-              };
               const initials = `${a.surname?.[0] ?? ""}${a.name?.[0] ?? ""}`
                 .toUpperCase()
                 .trim();
               return (
                 <tr key={a.id}>
                   <td>
+                    <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      #{a.id}
+                    </span>
+                  </td>
+                  <td>
                     <div className="flex items-center gap-3">
                       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-100 to-brand-50 text-xs font-bold text-brand-700 ring-1 ring-brand-100">
                         {initials || "?"}
                       </span>
-                      <NameCell surname={a.surname} name={a.name} />
+                      <NameCell surname={a.surname} name={a.name} phone={a.phone} />
                     </div>
                   </td>
                   <td className="font-mono text-xs text-slate-600">
@@ -123,7 +146,10 @@ export default async function UsersPage({
                     )}
                   </td>
                   <td>
-                    <span className={`badge ${s.cls}`}>{s.label}</span>
+                    <StatusBadge status={a.status} />
+                  </td>
+                  <td className="whitespace-nowrap text-xs text-slate-400">
+                    {fmtDateTime(a.createdAt)}
                   </td>
                   <td className="text-right">
                     <UserViewButton
@@ -150,6 +176,13 @@ export default async function UsersPage({
                         complete: a.complete,
                         appointmentRef: a.appointmentRef ?? null,
                         resultNote: a.resultNote ?? null,
+                        hasPhoto: !!a.passportPhoto,
+                        hasPersonPhoto:
+                          a.personId != null &&
+                          withPersonPhoto.has(a.personId),
+                        canPdf:
+                          PDF_STATUSES.includes(a.status) ||
+                          !!a.appointmentRef,
                         group: a.group
                           ? { id: a.group.id, name: a.group.name }
                           : null,
@@ -162,7 +195,7 @@ export default async function UsersPage({
             {applicants.length === 0 && (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={8}
                   className="py-12 text-center text-sm text-slate-400"
                 >
                   <People

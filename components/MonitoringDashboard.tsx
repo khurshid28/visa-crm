@@ -7,6 +7,7 @@ import {
   LineChart,
   GroupedBars,
 } from "@/components/DashboardCharts";
+import { fmtDateTime } from "@/lib/date";
 
 type Worker = {
   profile: string;
@@ -72,7 +73,7 @@ function timeAgo(iso: string) {
   const d = Date.now() - new Date(iso).getTime();
   if (d < 60_000) return `${Math.floor(d / 1000)} s oldin`;
   if (d < 3_600_000) return `${Math.floor(d / 60_000)} daq oldin`;
-  return new Date(iso).toLocaleString("uz-UZ");
+  return fmtDateTime(iso);
 }
 
 export default function MonitoringDashboard() {

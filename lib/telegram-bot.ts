@@ -115,19 +115,49 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// ---- Xabar dizayni uchun yordamchilar (izchil, chiroyli ko'rinish) ----
+const DIV = "─────────────────";
+
+// Sarlavhali blok: ikonka + qalin sarlavha + nozik ajratgich.
+function title(icon: string, text: string, sub?: string): string {
+  return (
+    `${icon} <b>${text}</b>\n` + (sub ? `<i>${sub}</i>\n` : "") + `${DIV}\n`
+  );
+}
+
+// "Belgi: qiymat" qatori (ixtiyoriy ikonka bilan).
+function row(label: string, value: string | number, icon = "▪️"): string {
+  return `${icon} ${label}: <b>${value}</b>\n`;
+}
+
+// Holatni emoji bilan bezaydi.
+function statusDot(key: string): string {
+  const ok = ["BOOKED", "ORDERED", "REGISTERED"];
+  const warn = ["NEW", "EDITED", "BOOKING"];
+  if (ok.includes(key)) return "🟢";
+  if (warn.includes(key)) return "🟡";
+  if (key === "FAILED") return "🔴";
+  return "⚪️";
+}
+
 // Arizachi (mijoz) ma'lumotlarini chiroyli matnga aylantiradi.
 function formatApplicant(a: ApplicantInfo): string {
   return (
-    `👤 <b>${esc(a.surname)} ${esc(a.name)}</b> (#${a.id})\n` +
-    `Guruh: ${esc(a.groupName)} (#${a.groupId})\n` +
-    `Passport: <code>${esc(a.passportNumber)}</code>\n` +
-    `Fuqarolik: ${esc(a.nationality || "—")} · Jins: ${esc(a.gender || "—")}\n` +
-    `Tug'ilgan: ${esc(a.birthdate || "—")} · Amal: ${esc(a.passportValidity || "—")}\n` +
-    `Tel: ${esc(a.phone || "—")}\n` +
-    `Email: ${esc(a.generatedEmail || "—")}\n` +
-    `Status: ${statusLabel(APPLICANT_STATUS, a.status)} · ` +
-    `To'liq: ${a.complete ? "✅" : "❌"} · ` +
-    `Rasm: ${a.hasPhoto ? "✅" : "❌"}`
+    title(
+      "👤",
+      `${esc(a.surname)} ${esc(a.name)}`,
+      `#${a.id} · ${esc(a.groupName)} (#${a.groupId})`,
+    ) +
+    row("Passport", `<code>${esc(a.passportNumber)}</code>`, "🛂") +
+    row("Fuqarolik", esc(a.nationality || "—"), "🌍") +
+    row("Jins", esc(a.gender || "—"), "⚧") +
+    row("Tug'ilgan", esc(a.birthdate || "—"), "🎂") +
+    row("Amal muddati", esc(a.passportValidity || "—"), "📅") +
+    row("Telefon", esc(a.phone || "—"), "📞") +
+    row("Email", esc(a.generatedEmail || "—"), "✉️") +
+    `${DIV}\n` +
+    `${statusDot(a.status)} Status: <b>${statusLabel(APPLICANT_STATUS, a.status)}</b>\n` +
+    `${a.complete ? "✅" : "❌"} To'liq ma'lumot · ${a.hasPhoto ? "🖼 Rasm bor" : "🚫 Rasm yo'q"}`
   );
 }
 
@@ -181,8 +211,9 @@ function parseSlotCloseAt(args: string[]): {
 }
 
 const HELP =
-  "<b>🛂 Visa CRM bot</b>\n" +
-  "Viza arizalarini boshqaruv boti. Quyidagi bosqichlar bo'yicha ishlang:\n\n" +
+  "🛂 <b>Visa CRM — Yo'riqnoma</b>\n" +
+  DIV +
+  "\n<i>Viza arizalarini boshqaruv boti. Bosqichma-bosqich ishlang:</i>\n\n" +
   "<b>1️⃣ Guruh yaratish</b>\n" +
   "/newgroup <code>nom</code> — yangi guruh ochish\n\n" +
   "<b>2️⃣ Arizachilarni qo'shish</b>\n" +
@@ -226,28 +257,37 @@ async function handleCommand(text: string): Promise<string> {
         include: { _count: { select: { applicants: true } } },
         take: 30,
       });
-      if (!groups.length) return "Guruhlar yo'q.";
+      if (!groups.length)
+        return title("📁", "Guruhlar") + "<i>Hali guruh yo'q.</i>";
       const lines = groups.map(
         (g) =>
-          `#${g.id} <b>${esc(g.name)}</b> — ${g._count.applicants} ta · ${statusLabel(GROUP_STATUS, g.status)}`,
+          `${statusDot(g.status)} <b>${esc(g.name)}</b> <code>#${g.id}</code>\n` +
+          `   👥 ${g._count.applicants} ta · ${statusLabel(GROUP_STATUS, g.status)}`,
       );
-      return "<b>Guruhlar</b>\n" + lines.join("\n");
+      return (
+        title("📁", "Guruhlar", `Jami: ${groups.length} ta`) + lines.join("\n")
+      );
     }
 
     case "group": {
       const id = Number(args[0]);
       if (!id) return "Foydalanish: /group <id>";
       const s = await getGroupStats(id);
-      if (!s) return "Guruh topilmadi.";
+      if (!s) return "❌ Guruh topilmadi.";
       return (
-        `<b>${esc(s.name)}</b> (#${s.id})\n` +
-        `Status: ${statusLabel(GROUP_STATUS, s.status)}\n` +
-        `Jami: ${s.total} · To'liq: ${s.complete}\n` +
-        `Ro'yxatdan o'tgan: ${s.registered}\n` +
-        `PDF gacha yetgan: ${s.ordered}\n` +
-        `Xato: ${s.failed}\n` +
-        `Urinishlar: ${s.attempts} (ro'yxat: ${s.registerRuns}, buyurtma: ${s.orderRuns})\n` +
-        `Slot: ${fmtDate(s.slotOpenAt)} → ${fmtDate(s.slotCloseAt)}`
+        title(
+          "📁",
+          esc(s.name),
+          `#${s.id} · ${statusDot(s.status)} ${statusLabel(GROUP_STATUS, s.status)}`,
+        ) +
+        row("Jami arizachi", s.total, "👥") +
+        row("To'liq ma'lumot", s.complete, "✔️") +
+        row("Ro'yxatdan o'tgan", s.registered, "📝") +
+        row("PDF gacha yetgan", s.ordered, "📄") +
+        row("Xato", s.failed, "🔴") +
+        `${DIV}\n` +
+        `🔁 Urinishlar: <b>${s.attempts}</b> <i>(ro'yxat: ${s.registerRuns}, buyurtma: ${s.orderRuns})</i>\n` +
+        `🕒 Slot: ${fmtDate(s.slotOpenAt)} → ${fmtDate(s.slotCloseAt)}`
       );
     }
 
@@ -263,17 +303,18 @@ async function handleCommand(text: string): Promise<string> {
       const q = args.join("").trim().toUpperCase();
       if (!q) return "Foydalanish: /find <passport>";
       const list = await findApplicantsByPassport(q);
-      if (!list.length) return `"${esc(q)}" bo'yicha arizachi topilmadi.`;
+      if (!list.length) return `❌ "${esc(q)}" bo'yicha arizachi topilmadi.`;
       if (list.length === 1) return formatApplicant(list[0]);
       return (
-        `<b>${list.length} ta natija</b> — "${esc(q)}":\n` +
+        title("🔍", "Qidiruv natijasi", `"${esc(q)}" — ${list.length} ta`) +
         list
           .map(
             (a) =>
-              `#${a.id} ${esc(a.surname)} ${esc(a.name)} · ${esc(a.passportNumber)} · ${statusLabel(APPLICANT_STATUS, a.status)}`,
+              `${statusDot(a.status)} <b>${esc(a.surname)} ${esc(a.name)}</b> <code>#${a.id}</code>\n` +
+              `   🛢 ${esc(a.passportNumber)} · ${statusLabel(APPLICANT_STATUS, a.status)}`,
           )
           .join("\n") +
-        `\n\nBatafsil: /user <id>`
+        `\n${DIV}\n<i>Batafsil: /user &lt;id&gt;</i>`
       );
     }
 
@@ -282,12 +323,12 @@ async function handleCommand(text: string): Promise<string> {
       if (!name) return "Foydalanish: /newgroup <nom>";
       const g = await prisma.group.create({ data: { name } });
       return (
-        `✅ Guruh yaratildi: #${g.id} <b>${esc(g.name)}</b>\n\n` +
+        title("✅", "Guruh yaratildi", `#${g.id} · ${esc(g.name)}`) +
         `<b>Keyingi qadam — arizachilarni qo'shish:</b>\n` +
         `📎 Excel (.xlsx/.xls) yoki CSV faylni shu chatga yuboring.\n` +
-        `Faylni yuborishda <b>izoh (caption)</b> maydoniga guruh raqamini yozing:\n\n` +
+        `📝 Izoh (caption) maydoniga guruh raqamini yozing:\n\n` +
         `<code>${g.id}</code>\n\n` +
-        `Men faylni qabul qilib, arizachilarni avtomatik qo'shaman. ⏳`
+        `<i>Faylni qabul qilib, arizachilarni avtomatik qo'shaman.</i> ⏳`
       );
     }
 
@@ -306,9 +347,14 @@ async function handleCommand(text: string): Promise<string> {
         const slot = await checkSlotOpen();
         if (!slot.open) {
           return (
-            `⛔ Buyurtma navbatga qo'shilmadi — saytda slot ochiq emas.\n` +
-            `Sabab: ${esc(slot.note)}\n\n` +
-            `Slot ochilishini kuting yoki /slotcheck bilan tekshiring.`
+            title(
+              "⛔",
+              "Buyurtma navbatga qo'shilmadi",
+              "Saytda slot ochiq emas",
+            ) +
+            `📝 Sabab: ${esc(slot.note)}\n` +
+            `${DIV}\n` +
+            `<i>Slot ochilishini kuting yoki /slotcheck bilan tekshiring.</i>`
           );
         }
 
@@ -318,12 +364,18 @@ async function handleCommand(text: string): Promise<string> {
           reason: "bot-order",
         });
         if (!queued.queuedJobs) {
-          return `ℹ️ Order navbatga qo'shilmadi (skip: ${queued.skippedJobs}). REGISTERED user yo'q yoki allaqachon navbatda.`;
+          return (
+            title("ℹ️", "Buyurtma navbatga qo'shilmadi") +
+            `⏭ Skip: <b>${queued.skippedJobs}</b>\n` +
+            `<i>REGISTERED user yo'q yoki allaqachon navbatda.</i>`
+          );
         }
         return (
-          `✅ Buyurtma navbatga qo'shildi (#${id})\n` +
-          `Userlar: <b>${queued.queuedJobs}</b> ta (skip: ${queued.skippedJobs})\n` +
-          `10 ta worker alohida Playwright profile'da parallel bajaradi.`
+          title("🚀", "Buyurtma navbatga qo'shildi", `Guruh #${id}`) +
+          row("Navbatga qo'shildi", `${queued.queuedJobs} ta`, "✅") +
+          row("O'tkazib yuborildi", `${queued.skippedJobs} ta`, "⏭") +
+          `${DIV}\n` +
+          `⚙️ 10 ta worker alohida profilda parallel bajaradi.`
         );
       }
 
@@ -334,12 +386,18 @@ async function handleCommand(text: string): Promise<string> {
         reason: "bot-register",
       });
       if (!queued.queuedJobs) {
-        return `ℹ️ Register navbatga qo'shilmadi (skip: ${queued.skippedJobs}). Register kutayotgan user yo'q yoki allaqachon navbatda.`;
+        return (
+          title("ℹ️", "Ro'yxatga qo'shilmadi") +
+          `⏭ Skip: <b>${queued.skippedJobs}</b>\n` +
+          `<i>Register kutayotgan user yo'q yoki allaqachon navbatda.</i>`
+        );
       }
       return (
-        `✅ Ro'yxatdan o'tkazish navbatga qo'shildi (#${id})\n` +
-        `Userlar: <b>${queued.queuedJobs}</b> ta (skip: ${queued.skippedJobs})\n` +
-        `10 ta worker alohida Playwright profile'da parallel bajaradi.`
+        title("🚀", "Ro'yxatdan o'tkazish boshlandi", `Guruh #${id}`) +
+        row("Navbatga qo'shildi", `${queued.queuedJobs} ta`, "✅") +
+        row("O'tkazib yuborildi", `${queued.skippedJobs} ta`, "⏭") +
+        `${DIV}\n` +
+        `⚙️ 10 ta worker alohida profilda parallel bajaradi.`
       );
     }
 
@@ -358,20 +416,20 @@ async function handleCommand(text: string): Promise<string> {
         if (error) return error;
         const g = await openSlot(id, closeAt, { source: "bot" });
         return (
-          `🟢 Slot ochildi: <b>${esc(g.name)}</b> (#${id})\n` +
-          (closeAt
-            ? `Yopilish vaqti: <b>${fmtDate(closeAt)}</b>\n\nEndi /order ${id} bilan buyurtma bering.`
-            : `\nEndi /order ${id} bilan buyurtma bering.`)
+          title("🟢", "Slot ochildi", `${esc(g.name)} (#${id})`) +
+          (closeAt ? row("Yopilish vaqti", fmtDate(closeAt), "🕒") : "") +
+          `${DIV}\n` +
+          `➡️ Endi <code>/order ${id}</code> bilan buyurtma bering.`
         );
       }
       const g = await closeSlot(id, { source: "bot" });
-      return `🔴 Slot yopildi: <b>${esc(g.name)}</b> (#${id})`;
+      return title("🔴", "Slot yopildi", `${esc(g.name)} (#${id})`).trimEnd();
     }
 
     case "slotcheck": {
       const slot = await checkSlotOpen();
       return (
-        `Sayt slot holati: ${slot.open ? "🟢 OCHIQ" : "🔴 YOPIQ"}\n` +
+        title("🔍", "Sayt slot holati", slot.open ? "🟢 OCHIQ" : "🔴 YOPIQ") +
         `${esc(slot.note)}`
       );
     }
@@ -384,11 +442,17 @@ async function handleCommand(text: string): Promise<string> {
           getSlotQueueStats(),
         ]);
         return (
-          `<b>Global monitoring holati</b>\n` +
-          `Faol: ${state.active ? "✅" : "❌"} · Pause: ${state.paused ? "✅" : "❌"}\n` +
-          `Slot vaqti: ${state.slotAt ? esc(fmtDate(new Date(state.slotAt))) : "—"}\n` +
-          `Navbat (REGISTERED): ${queue.registeredTotal} ta (${queue.registeredComplete} ta to'liq), guruhlar: ${queue.groups}\n` +
-          `Oxirgi holat: ${esc(state.lastMessage)}`
+          title("🕒", "Global monitoring holati") +
+          `${state.active ? "✅" : "❌"} Faol · ${state.paused ? "⏸ Pause" : "▶️ Ishlamoqda"}\n` +
+          row(
+            "Slot vaqti",
+            state.slotAt ? esc(fmtDate(new Date(state.slotAt))) : "—",
+            "🕓",
+          ) +
+          `${DIV}\n` +
+          `👥 Navbat (REGISTERED): <b>${queue.registeredTotal}</b> ta ` +
+          `<i>(${queue.registeredComplete} to'liq, ${queue.groups} guruh)</i>\n` +
+          `📝 Oxirgi holat: ${esc(state.lastMessage)}`
         );
       }
       const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
@@ -445,9 +509,16 @@ async function handleCommand(text: string): Promise<string> {
       const id = Number(args[0]);
       if (!id) return "Foydalanish: /send <id>";
       const out = await sendGroupPdfsToTelegram(id);
-      if (!out) return "Guruh topilmadi.";
-      if (out.count === 0) return "PDF gacha yetgan arizachi yo'q.";
-      return `Yuborildi: ${out.dispatch.sent} hujjat${out.dispatch.failed.length ? `, xato: ${out.dispatch.failed.length}` : ""}`;
+      if (!out) return "❌ Guruh topilmadi.";
+      if (out.count === 0) return "ℹ️ PDF gacha yetgan arizachi yo'q.";
+      return (
+        title("📄", "PDF yuborildi", `Guruh #${id}`) +
+        row("Yuborildi", `${out.dispatch.sent} hujjat`, "✅") +
+        (out.dispatch.failed.length
+          ? row("Xato", `${out.dispatch.failed.length} ta`, "🔴")
+          : ""
+        ).trimEnd()
+      );
     }
 
     default:
@@ -794,12 +865,13 @@ async function handleCallback(cb: import("./telegram").TgCallbackQuery) {
           await editMessageText(chatId, messageId, response);
         } else {
           response =
-            `✅ <b>Qo'shildi</b> — guruh #${groupId}\n\n` +
-            `➕ Qo'shildi: <b>${res.imported}</b>\n` +
-            `✔️ To'liq ma'lumotli: ${res.complete}\n` +
-            `🔁 Mavjud shaxs (boshqa guruhdan): ${res.reused}\n` +
-            (res.skipped ? `⏭ Tashlandi: ${res.skipped}\n` : "") +
-            `\nKeyingi qadam — ro'yxatdan o'tkazish:`;
+            title("✅", "Arizachilar qo'shildi", `Guruh #${groupId}`) +
+            row("Qo'shildi", res.imported, "➕") +
+            row("To'liq ma'lumotli", res.complete, "✔️") +
+            row("Mavjud shaxs (boshqa guruhdan)", res.reused, "🔁") +
+            (res.skipped ? row("Tashlandi", res.skipped, "⏭") : "") +
+            `${DIV}\n` +
+            `➡️ Keyingi qadam — ro'yxatdan o'tkazish:`;
           await editMessageText(chatId, messageId, response, {
             inlineKeyboard: [
               [
