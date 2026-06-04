@@ -35,6 +35,13 @@ export type AutomationResult = {
   url: string;
 };
 
+export type ActivationResult = {
+  ok: boolean;
+  link: string | null; // gmail'dan topilgan aktivatsiya linki
+  note: string;
+  to: string | null; // qaysi email manziliga xat keldi
+};
+
 type Stage = "register" | "order";
 
 // Har bir maydon uchun forma elementlarini topish kalit so'zlari (kichik harf).
@@ -54,6 +61,52 @@ const FIELD_KEYWORDS: Record<keyof AutomationApplicant, string[]> = {
 function envHeadless(): boolean {
   const v = (process.env.BOOKING_HEADLESS || "true").toLowerCase();
   return v !== "false" && v !== "0";
+}
+
+/** Gmail/profil kalitini papka nomi uchun xavfsiz holatga keltiradi. */
+export function sanitizeProfileKey(key: string): string {
+  return (key || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+}
+
+/**
+ * Profil papkasini aniqlaydi.
+ *  - profileKey berilsa (har bir userning gmail'i): register va order BIR XIL
+ *    papkani ulashadi — shu sababli cookies/localStorage/sessiya saqlanadi va
+ *    register bilan booking adashmaydi.
+ *  - aks holda: eski xulq (bosqich bo'yicha alohida papka).
+ */
+function profileDirFor(stage: Stage, profileKey?: string | null): string {
+  const base = (process.env.BOOKING_PROFILE_DIR || "").trim();
+  if (!base) return "";
+  const safe = profileKey ? sanitizeProfileKey(profileKey) : "";
+  if (safe) return `${base}/u-${safe}`;
+  return `${base}-${stage}`;
+}
+
+async function openBrowserContext(profileDir: string) {
+  const { chromium } = await import("playwright");
+
+  if (profileDir) {
+    const context = await chromium.launchPersistentContext(profileDir, {
+      headless: envHeadless(),
+    });
+    return {
+      context,
+      close: async () => context.close(),
+    };
+  }
+
+  const browser = await chromium.launch({ headless: envHeadless() });
+  const context = await browser.newContext();
+  return {
+    context,
+    close: async () => browser.close(),
+  };
 }
 
 function urlForStage(stage: Stage): string | null {
@@ -109,12 +162,13 @@ export async function checkSlotOpen(): Promise<SlotCheckResult> {
   const openMarks = openText.length ? openText : defaultOpen;
   const closedMarks = closedText.length ? closedText : defaultClosed;
 
-  let browser: import("playwright").Browser | null = null;
+  let closeSession: (() => Promise<void>) | null = null;
   try {
-    const { chromium } = await import("playwright");
-    browser = await chromium.launch({ headless: envHeadless() });
-    const context = await browser.newContext();
-    const page = await context.newPage();
+    const profileDir = profileDirFor("order") || profileDirFor("register");
+    const session = await openBrowserContext(profileDir);
+    closeSession = session.close;
+
+    const page = await session.context.newPage();
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page
       .waitForLoadState("networkidle", { timeout: 8000 })
@@ -127,8 +181,8 @@ export async function checkSlotOpen(): Promise<SlotCheckResult> {
         .catch(() => "")) || ""
     ).toLowerCase();
 
-    await browser.close();
-    browser = null;
+    await closeSession();
+    closeSession = null;
 
     const hasClosed = closedMarks.some((m) => body.includes(m));
     const hasOpen = openMarks.some((m) => body.includes(m));
@@ -145,7 +199,7 @@ export async function checkSlotOpen(): Promise<SlotCheckResult> {
       url,
     };
   } catch (err) {
-    if (browser) await browser.close().catch(() => {});
+    if (closeSession) await closeSession().catch(() => {});
     const msg = err instanceof Error ? err.message : String(err);
     return {
       open: false,
@@ -176,6 +230,7 @@ function extractRef(text: string): string | null {
 export async function runBooking(
   stage: Stage,
   applicant: AutomationApplicant,
+  opts?: { profileKey?: string | null },
 ): Promise<AutomationResult> {
   const url = urlForStage(stage);
   if (!url) {
@@ -188,15 +243,16 @@ export async function runBooking(
     };
   }
 
-  let browser: import("playwright").Browser | null = null;
+  let closeSession: (() => Promise<void>) | null = null;
   const filled: string[] = [];
 
   try {
-    // Dinamik import — modul faqat ishlash vaqtida yuklanadi.
-    const { chromium } = await import("playwright");
-    browser = await chromium.launch({ headless: envHeadless() });
-    const context = await browser.newContext();
-    const page = await context.newPage();
+    const profileKey =
+      opts?.profileKey || applicant.generatedEmail || applicant.email || null;
+    const session = await openBrowserContext(profileDirFor(stage, profileKey));
+    closeSession = session.close;
+
+    const page = await session.context.newPage();
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
 
@@ -237,8 +293,8 @@ export async function runBooking(
         .catch(() => "")) || "";
     const ref = extractRef(bodyText);
 
-    await browser.close();
-    browser = null;
+    await closeSession();
+    closeSession = null;
 
     const note =
       `${stage === "order" ? "Buyurtma" : "Ro'yxat"}: ` +
@@ -248,7 +304,7 @@ export async function runBooking(
 
     return { ok: filled.length > 0 || submitted, ref, note, filled, url };
   } catch (err) {
-    if (browser) await browser.close().catch(() => {});
+    if (closeSession) await closeSession().catch(() => {});
     const msg = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
@@ -256,6 +312,108 @@ export async function runBooking(
       note: `Avtomatlashtirish xatosi: ${msg.slice(0, 200)}`,
       filled,
       url,
+    };
+  }
+}
+
+/**
+ * Register'dan keyin aktivatsiya: gmail qutidan userning aktivatsiya xatini
+ * kutadi, ichidagi linkni topadi va USERNING profilida ochadi.
+ *  - IMAP sozlanmagan bo'lsa: ok=true, "o'tkazib yuborildi" (register bloklanmaydi).
+ *  - Xat topilmasa: ok=false (register to'liq hisoblanmaydi).
+ *  - Link topilib ochilsa: ok=true, register to'liq tugadi.
+ */
+export async function runActivation(
+  applicant: AutomationApplicant,
+  opts?: { profileKey?: string | null },
+): Promise<ActivationResult> {
+  const toEmail = applicant.generatedEmail || applicant.email || null;
+  if (!toEmail) {
+    return { ok: false, link: null, to: null, note: "Email manzili yo'q" };
+  }
+
+  const { isMailListenerEnabled, waitForActivationMail } =
+    await import("./mail-listener");
+
+  if (!isMailListenerEnabled()) {
+    // IMAP sozlanmagan — aktivatsiyani o'tkazib yuboramiz (register bloklanmasin).
+    return {
+      ok: true,
+      link: null,
+      to: toEmail,
+      note: "Aktivatsiya o'tkazib yuborildi (IMAP sozlanmagan)",
+    };
+  }
+
+  const mail = await waitForActivationMail(toEmail);
+  if (!mail) {
+    return {
+      ok: false,
+      link: null,
+      to: toEmail,
+      note: "Aktivatsiya xati topilmadi (gmail'da link kelmadi)",
+    };
+  }
+
+  // Linkni userning profilida ochamiz.
+  let closeSession: (() => Promise<void>) | null = null;
+  try {
+    const profileKey = opts?.profileKey || toEmail;
+    const session = await openBrowserContext(
+      profileDirFor("register", profileKey),
+    );
+    closeSession = session.close;
+
+    const page = await session.context.newPage();
+    await page.goto(mail.link, {
+      waitUntil: "domcontentloaded",
+      timeout: 45000,
+    });
+    await page
+      .waitForLoadState("networkidle", { timeout: 10000 })
+      .catch(() => {});
+
+    const body = (
+      (await page
+        .locator("body")
+        .innerText()
+        .catch(() => "")) || ""
+    ).toLowerCase();
+
+    await closeSession();
+    closeSession = null;
+
+    // Xatolik belgilari (link eskirgan/yaroqsiz bo'lsa).
+    const failMarks = [
+      "expired",
+      "invalid",
+      "not valid",
+      "link has expired",
+      "muddati",
+    ];
+    if (failMarks.some((m) => body.includes(m))) {
+      return {
+        ok: false,
+        link: mail.link,
+        to: toEmail,
+        note: "Aktivatsiya linki yaroqsiz/eskirgan",
+      };
+    }
+
+    return {
+      ok: true,
+      link: mail.link,
+      to: toEmail,
+      note: "Aktivatsiya bajarildi (link ochildi)",
+    };
+  } catch (err) {
+    if (closeSession) await closeSession().catch(() => {});
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      link: mail.link,
+      to: toEmail,
+      note: `Aktivatsiya xatosi: ${msg.slice(0, 200)}`,
     };
   }
 }

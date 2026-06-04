@@ -8,7 +8,7 @@ import {
 } from "iconsax-react";
 import { prisma } from "@/lib/prisma";
 import { GROUP_STATUS, APPLICANT_STATUS } from "@/lib/status";
-import { StatusDonut, GroupBars } from "@/components/DashboardCharts";
+import { StatusDonut, GroupBars, LineChart } from "@/components/DashboardCharts";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +38,32 @@ export default async function DashboardPage() {
     take: 6,
     include: { _count: { select: { applicants: true } } },
   });
+
+  // So'nggi 7 kun: kunlik yangi arizachilar (line chart).
+  const since = new Date();
+  since.setHours(0, 0, 0, 0);
+  since.setDate(since.getDate() - 6);
+  const recentApplicants = await prisma.applicant.findMany({
+    where: { createdAt: { gte: since } },
+    select: { createdAt: true },
+  });
+  const days: { key: string; label: string }[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(since);
+    d.setDate(since.getDate() + i);
+    days.push({
+      key: d.toISOString().slice(0, 10),
+      label: `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`,
+    });
+  }
+  const dayCount: Record<string, number> = {};
+  for (const d of days) dayCount[d.key] = 0;
+  for (const a of recentApplicants) {
+    const k = a.createdAt.toISOString().slice(0, 10);
+    if (k in dayCount) dayCount[k]++;
+  }
+  const trendPoints = days.map((d) => dayCount[d.key]);
+  const trendLabels = days.map((d) => d.label);
 
   const donutData = byStatus.map((s) => ({
     label: APPLICANT_STATUS[s.status]?.label ?? s.status,
@@ -102,6 +128,18 @@ export default async function DashboardPage() {
           </h2>
           <GroupBars data={barData} />
         </div>
+      </div>
+
+      <div className="card">
+        <h2 className="mb-4 text-sm font-semibold text-slate-700">
+          So'nggi 7 kun — yangi arizachilar
+        </h2>
+        <LineChart
+          labels={trendLabels}
+          series={[
+            { label: "Yangi arizachilar", color: "#6366f1", points: trendPoints },
+          ]}
+        />
       </div>
 
       <div className="card">

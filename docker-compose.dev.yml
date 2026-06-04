@@ -1,0 +1,45 @@
+# Dev mode: faqat Redis va RabbitMQ docker'da ishlaydi.
+# App, bot, workerlar va MySQL lokalda (npm run dev / npm run worker:order) ishlatiladi.
+#
+# Ishga tushirish:
+#   docker compose -f docker-compose.dev.yml up -d
+# To'xtatish:
+#   docker compose -f docker-compose.dev.yml down
+#
+# Lokal .env uchun:
+#   REDIS_URL=redis://localhost:6379
+#   RABBITMQ_URL=amqp://guest:guest@localhost:5672
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: visa-crm-dev-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - dev_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: visa-crm-dev-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI (http://localhost:15672, guest/guest)
+    volumes:
+      - dev_rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  dev_redis_data:
+  dev_rabbitmq_data:

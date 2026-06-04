@@ -8,6 +8,7 @@ import { prisma } from "./prisma";
 import { ApplicantStatus, GroupStatus } from "@prisma/client";
 import {
   runBooking,
+  runActivation,
   checkSlotOpen,
   type AutomationApplicant,
 } from "./automation";
@@ -122,23 +123,289 @@ function nextStatusFor(stage: Stage): ApplicantStatus {
     : ApplicantStatus.REGISTERED;
 }
 
-// Bitta arizachini bitta bosqichdan o'tkazadi.
-export async function bookApplicant(applicantId: number, stage: Stage) {
+// Bir bosqich uchun maksimal urinishlar soni (.env: ORDER_MAX_ATTEMPTS).
+function maxAttempts(): number {
+  const n = Number(process.env.ORDER_MAX_ATTEMPTS || 3);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+}
+
+// Register necha soatdan keyin "eskirgan" hisoblanadi (.env: REGISTER_TTL_HOURS).
+function registerTtlMs(): number {
+  const h = Number(process.env.REGISTER_TTL_HOURS || 24);
+  return (Number.isFinite(h) && h > 0 ? h : 24) * 3600 * 1000;
+}
+
+type ApplicantRow = Awaited<ReturnType<typeof prisma.applicant.findUnique>>;
+
+// Bitta arizachi, bitta bosqich — 3 martagacha urinadi, har urinishni
+// AutomationLog'ga yozadi, vaqt (ms) va status'ni saqlaydi.
+async function runStageWithRetry(
+  applicant: NonNullable<ApplicantRow>,
+  stage: Stage,
+  workerProfile?: string | null,
+): Promise<{
+  ok: boolean;
+  ref: string | null;
+  note: string;
+  attempts: number;
+  durationMs: number;
+}> {
+  const limit = maxAttempts();
+  const profileKey = applicant.generatedEmail || applicant.email || null;
+  const input = toAutomationInput(applicant);
+
+  let lastNote = "";
+  let lastRef: string | null = null;
+  let ok = false;
+  let attemptUsed = 0;
+  let durationMs = 0;
+
+  for (let attempt = 1; attempt <= limit; attempt++) {
+    attemptUsed = attempt;
+    const startedAt = new Date();
+    const t0 = Date.now();
+    const result = await runBooking(stage, input, { profileKey });
+    durationMs = Date.now() - t0;
+    const finishedAt = new Date();
+
+    lastNote = result.note;
+    lastRef = result.ref ?? lastRef;
+    ok = result.ok;
+
+    await prisma.automationLog
+      .create({
+        data: {
+          applicantId: applicant.id,
+          groupId: applicant.groupId,
+          stage,
+          attempt,
+          ok,
+          durationMs,
+          note: `${result.note}${ok ? "" : ` (urinish ${attempt}/${limit})`}`,
+          workerProfile: workerProfile ?? null,
+          startedAt,
+          finishedAt,
+        },
+      })
+      .catch(() => {});
+
+    if (ok) break;
+  }
+
+  return {
+    ok,
+    ref: lastRef,
+    note: lastNote,
+    attempts: attemptUsed,
+    durationMs,
+  };
+}
+
+// Register eskirgan (yoki yo'q) bo'lsa true qaytaradi — qayta register kerak.
+function registerStale(applicant: NonNullable<ApplicantRow>): boolean {
+  if (!applicant.registerFinishedAt) return true;
+  return Date.now() - applicant.registerFinishedAt.getTime() > registerTtlMs();
+}
+
+// Bitta arizachini bitta bosqichdan o'tkazadi (retry + vaqt + log bilan).
+// order bosqichida: register eskirgan/yo'q bo'lsa avval qayta register qiladi.
+async function processApplicant(
+  applicantId: number,
+  stage: Stage,
+  workerProfile?: string | null,
+): Promise<{
+  ok: boolean;
+  ref: string | null;
+  note: string;
+  reRegistered: boolean;
+}> {
+  let applicant = await prisma.applicant.findUnique({
+    where: { id: applicantId },
+  });
+  if (!applicant) {
+    return {
+      ok: false,
+      ref: null,
+      note: "Arizachi topilmadi",
+      reRegistered: false,
+    };
+  }
+
+  let reRegistered = false;
+
+  // order: register eskirgan bo'lsa — avval qayta register qilamiz.
+  if (stage === "order" && registerStale(applicant)) {
+    const regStart = new Date();
+    const reg = await runStageWithRetry(applicant, "register", workerProfile);
+    await prisma.applicant.update({
+      where: { id: applicant.id },
+      data: {
+        registerStartedAt: regStart,
+        registerFinishedAt: new Date(),
+        registerDurationMs: reg.durationMs,
+        registerAttempts: { increment: reg.attempts },
+        status: reg.ok ? ApplicantStatus.REGISTERED : ApplicantStatus.FAILED,
+        appointmentRef: reg.ref ?? applicant.appointmentRef,
+        resultNote: reg.ok
+          ? `Qayta register: ${reg.note}`
+          : `Qayta register bo'lmadi: ${reg.note}`,
+      },
+    });
+    reRegistered = true;
+    if (!reg.ok) {
+      return {
+        ok: false,
+        ref: reg.ref,
+        note: `Qayta register bo'lmadi: ${reg.note}`,
+        reRegistered,
+      };
+    }
+    applicant = await prisma.applicant.findUnique({
+      where: { id: applicant.id },
+    });
+    if (!applicant) {
+      return { ok: false, ref: null, note: "Arizachi topilmadi", reRegistered };
+    }
+  }
+
+  const startedAt = new Date();
+  const out = await runStageWithRetry(applicant, stage, workerProfile);
+  const finishedAt = new Date();
+
+  const failedNote = `Bo'lmadi (${out.attempts} urinish): ${out.note}`;
+
+  // --- REGISTER: muvaffaqiyatli bo'lsa, gmail aktivatsiyasini bajaramiz.
+  //     Aktivatsiya tugamaguncha register TO'LIQ hisoblanmaydi.
+  if (stage === "register") {
+    if (!out.ok) {
+      await prisma.applicant.update({
+        where: { id: applicant.id },
+        data: {
+          registerStartedAt: startedAt,
+          registerFinishedAt: finishedAt,
+          registerDurationMs: out.durationMs,
+          registerAttempts: { increment: out.attempts },
+          profileKey:
+            applicant.generatedEmail || applicant.email || applicant.profileKey,
+          status: ApplicantStatus.FAILED,
+          appointmentRef: out.ref ?? applicant.appointmentRef,
+          resultNote: failedNote,
+          activationStatus: "none",
+        },
+      });
+      return { ok: false, ref: out.ref, note: failedNote, reRegistered };
+    }
+
+    // Forma yuborildi — endi gmail'dagi aktivatsiya linkini kutamiz/ochamiz.
+    const profileKey =
+      applicant.generatedEmail || applicant.email || applicant.profileKey;
+    await prisma.applicant.update({
+      where: { id: applicant.id },
+      data: { activationStatus: "pending" },
+    });
+
+    const actStart = new Date();
+    const act = await runActivation(toAutomationInput(applicant), {
+      profileKey,
+    });
+    const actEnd = new Date();
+
+    await prisma.automationLog
+      .create({
+        data: {
+          applicantId: applicant.id,
+          groupId: applicant.groupId,
+          stage: "activation",
+          attempt: 1,
+          ok: act.ok,
+          durationMs: actEnd.getTime() - actStart.getTime(),
+          note: act.note,
+          workerProfile: workerProfile ?? null,
+          startedAt: actStart,
+          finishedAt: actEnd,
+        },
+      })
+      .catch(() => {});
+
+    await prisma.applicant.update({
+      where: { id: applicant.id },
+      data: {
+        registerStartedAt: startedAt,
+        registerFinishedAt: finishedAt,
+        registerDurationMs: out.durationMs,
+        registerAttempts: { increment: out.attempts },
+        profileKey,
+        appointmentRef: out.ref ?? applicant.appointmentRef,
+        // Faqat aktivatsiya muvaffaqiyatli bo'lsa REGISTERED (to'liq tugadi).
+        status: act.ok ? ApplicantStatus.REGISTERED : ApplicantStatus.FAILED,
+        activationStatus: act.ok ? "activated" : "failed",
+        activationEmailTo: act.to,
+        activationLink: act.link,
+        activationSentAt: act.link ? actStart : null,
+        activatedAt: act.ok ? actEnd : null,
+        resultNote: act.ok
+          ? `Ro'yxat + aktivatsiya tugadi: ${act.note}`
+          : `Register bo'ldi, lekin aktivatsiya bo'lmadi: ${act.note}`,
+      },
+    });
+
+    return {
+      ok: act.ok,
+      ref: out.ref,
+      note: act.ok
+        ? `Ro'yxat + aktivatsiya tugadi`
+        : `Aktivatsiya bo'lmadi: ${act.note}`,
+      reRegistered,
+    };
+  }
+
+  // --- ORDER: oddiy yo'l.
+  const timingData = {
+    orderStartedAt: startedAt,
+    orderFinishedAt: finishedAt,
+    orderDurationMs: out.durationMs,
+    orderAttempts: { increment: out.attempts },
+  };
+
+  await prisma.applicant.update({
+    where: { id: applicant.id },
+    data: {
+      ...timingData,
+      profileKey:
+        applicant.generatedEmail || applicant.email || applicant.profileKey,
+      status: out.ok ? nextStatusFor(stage) : ApplicantStatus.FAILED,
+      appointmentRef: out.ref ?? applicant.appointmentRef,
+      resultNote: out.ok ? out.note : failedNote,
+    },
+  });
+
+  return {
+    ok: out.ok,
+    ref: out.ref,
+    note: out.ok ? out.note : failedNote,
+    reRegistered,
+  };
+}
+
+// Bitta arizachini bitta bosqichdan o'tkazadi (tashqi API uchun).
+export async function bookApplicant(
+  applicantId: number,
+  stage: Stage,
+  workerProfile?: string | null,
+) {
   const applicant = await prisma.applicant.findUnique({
     where: { id: applicantId },
   });
   if (!applicant) return null;
 
-  const result = await runBooking(stage, toAutomationInput(applicant));
-  const updated = await prisma.applicant.update({
+  const out = await processApplicant(applicantId, stage, workerProfile);
+  const updated = await prisma.applicant.findUnique({
     where: { id: applicantId },
-    data: {
-      status: result.ok ? nextStatusFor(stage) : ApplicantStatus.FAILED,
-      appointmentRef: result.ref ?? applicant.appointmentRef,
-      resultNote: result.note,
-    },
   });
-  return { result, applicant: updated };
+  return {
+    result: { ok: out.ok, ref: out.ref, note: out.note },
+    applicant: updated ?? applicant,
+  };
 }
 
 export type GroupBookingResult = {
@@ -163,14 +430,15 @@ export type GroupBookingResult = {
 export async function bookGroup(
   groupId: number,
   stage: Stage,
-  source: "web" | "bot" = "web",
+  source: "web" | "bot" | "system" = "web",
+  opts: { skipSlotCheck?: boolean } = {},
 ): Promise<GroupBookingResult | null> {
   const group = await prisma.group.findUnique({ where: { id: groupId } });
   if (!group) return null;
 
   // "order" (buyurtma / run-2) — avval saytda slot ochiqligini Playwright
   // bilan tekshiramiz. Ochiq bo'lmasa, hech qanday buyurtma yuborilmaydi.
-  if (stage === "order") {
+  if (stage === "order" && !opts.skipSlotCheck) {
     const slot = await checkSlotOpen();
     if (!slot.open) {
       await prisma.runAttempt.create({
@@ -200,26 +468,34 @@ export async function bookGroup(
   }
 
   const applicants = await prisma.applicant.findMany({
-    where: { groupId, status: { notIn: [ApplicantStatus.ARCHIVED] } },
+    where: {
+      groupId,
+      status:
+        stage === "order"
+          ? ApplicantStatus.REGISTERED
+          : {
+              in: [
+                ApplicantStatus.NEW,
+                ApplicantStatus.EDITED,
+                ApplicantStatus.BOOKING,
+              ],
+            },
+    },
   });
 
   const results: GroupBookingResult["results"] = [];
   for (const a of applicants) {
-    const result = await runBooking(stage, toAutomationInput(a));
-    await prisma.applicant.update({
-      where: { id: a.id },
-      data: {
-        status: result.ok ? nextStatusFor(stage) : ApplicantStatus.FAILED,
-        appointmentRef: result.ref ?? a.appointmentRef,
-        resultNote: result.note,
-      },
-    });
+    const out = await processApplicant(
+      a.id,
+      stage,
+      source === "system" ? null : source,
+    );
     results.push({
       id: a.id,
       name: `${a.surname} ${a.name}`,
       passportNumber: a.passportNumber,
-      ok: result.ok,
-      note: result.note,
+      ok: out.ok,
+      note: out.note,
     });
   }
 
@@ -250,15 +526,31 @@ export async function bookGroup(
     },
   });
 
-  await changeGroupStatus(
-    groupId,
-    GroupStatus.BOOKING,
-    {},
-    {
-      source,
-      note: `${stage === "order" ? "Buyurtma" : "Ro'yxat"} (${attempt}-urinish): ${succeeded}/${results.length} muvaffaqiyatli`,
-    },
-  );
+  if (stage === "register") {
+    await changeGroupStatus(
+      groupId,
+      GroupStatus.SLOT_CLOSED,
+      {},
+      {
+        source,
+        note:
+          `Ro'yxat (${attempt}-urinish): ${succeeded}/${results.length} muvaffaqiyatli. ` +
+          "Slot ochilishini kutilmoqda",
+      },
+    );
+  } else {
+    await changeGroupStatus(
+      groupId,
+      failed.length === 0 && results.length > 0
+        ? GroupStatus.DONE
+        : GroupStatus.BOOKING,
+      {},
+      {
+        source,
+        note: `Buyurtma (${attempt}-urinish): ${succeeded}/${results.length} muvaffaqiyatli`,
+      },
+    );
+  }
 
   return {
     stage,
@@ -273,6 +565,67 @@ export async function bookGroup(
       note: f.note,
     })),
     results,
+  };
+}
+
+export type GlobalOrderResult = {
+  groups: number;
+  registeredTotal: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  details: Array<{
+    groupId: number;
+    processed: number;
+    succeeded: number;
+    failed: number;
+  }>;
+};
+
+// Barcha guruhlardagi REGISTERED arizachilar uchun 2-bosqichni ishga tushiradi.
+// Slot tekshiruvi tashqaridan bir marta qilingan bo'lishi uchun bookGroup'da skipSlotCheck=true.
+export async function orderRegisteredAcrossGroups(
+  source: "web" | "bot" | "system" = "system",
+): Promise<GlobalOrderResult> {
+  const grouped = await prisma.applicant.groupBy({
+    by: ["groupId"],
+    where: { status: ApplicantStatus.REGISTERED },
+    _count: { _all: true },
+  });
+
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+  const details: GlobalOrderResult["details"] = [];
+
+  for (const g of grouped) {
+    const out = await bookGroup(
+      g.groupId,
+      "order",
+      source === "system" ? "bot" : source,
+      {
+        skipSlotCheck: true,
+      },
+    );
+    if (!out) continue;
+    processed += out.processed;
+    succeeded += out.succeeded;
+    failed += out.failedCount;
+    details.push({
+      groupId: g.groupId,
+      processed: out.processed,
+      succeeded: out.succeeded,
+      failed: out.failedCount,
+    });
+  }
+
+  return {
+    groups: grouped.length,
+    registeredTotal: grouped.reduce((a, b) => a + b._count._all, 0),
+    processed,
+    succeeded,
+    failed,
+    details,
   };
 }
 

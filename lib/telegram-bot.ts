@@ -29,7 +29,6 @@ import {
   type TgInlineKeyboard,
 } from "./telegram";
 import {
-  bookGroup,
   getGroupStats,
   getRecentGroups,
   getApplicantById,
@@ -44,6 +43,13 @@ import {
   type ApplicantInfo,
 } from "./booking";
 import { checkSlotOpen } from "./automation";
+import { enqueueGroupOrder, enqueueGroupRegister } from "./order-queue";
+import {
+  getSlotMonitorState,
+  getSlotQueueStats,
+  runSlotMonitorTick,
+  setSlotMonitorState,
+} from "./slot-monitor";
 import { readMrzFromImage } from "./passport-ocr";
 import { GROUP_STATUS, APPLICANT_STATUS } from "./status";
 
@@ -67,6 +73,12 @@ const COMMANDS = [
   { command: "order", description: "2-bosqich: buyurtma berish /order <id>" },
   { command: "slot", description: "Slot: /slot <id> open|close" },
   { command: "slotcheck", description: "Saytda slot ochiqligini tekshirish" },
+  { command: "go", description: "Global monitoringni davom ettirish" },
+  { command: "pause", description: "Global monitoringni pauza qilish" },
+  {
+    command: "monitor",
+    description: "Global slot monitoring: /monitor <YYYY-MM-DD HH:MM>",
+  },
   { command: "send", description: "PDF yuborish: /send <id>" },
   { command: "help", description: "Yordam" },
 ];
@@ -116,47 +128,6 @@ function formatApplicant(a: ApplicantInfo): string {
     `Status: ${statusLabel(APPLICANT_STATUS, a.status)} · ` +
     `To'liq: ${a.complete ? "✅" : "❌"} · ` +
     `Rasm: ${a.hasPhoto ? "✅" : "❌"}`
-  );
-}
-
-// Booking (register/order) natijasini matnga aylantiradi.
-//   - hammasi xato        → ❌ Xato
-//   - qisman xato         → ⚠️ Qisman bajarildi
-//   - hammasi muvaffaqiyat → ✅ / 📝 bajarildi
-function formatBookingResult(
-  out: import("./booking").GroupBookingResult,
-): string {
-  const isOrder = out.stage === "order";
-  const noneOk = out.succeeded === 0 && out.processed > 0;
-  const someFailed = out.failedCount > 0 && out.succeeded > 0;
-  const empty = out.processed === 0;
-
-  let head: string;
-  if (empty) {
-    head = "ℹ️ Arizachi yo'q — bajariladigan ish topilmadi";
-  } else if (noneOk) {
-    head = isOrder
-      ? `❌ Buyurtma xato — ${out.attempt}-urinish`
-      : `❌ Ro'yxatdan o'tkazishda xato — ${out.attempt}-urinish`;
-  } else if (someFailed) {
-    head = isOrder
-      ? `⚠️ Buyurtma qisman bajarildi — ${out.attempt}-urinish`
-      : `⚠️ Ro'yxat qisman bajarildi — ${out.attempt}-urinish`;
-  } else {
-    head = isOrder
-      ? `✅ Buyurtma berildi — ${out.attempt}-urinish`
-      : `📝 Ro'yxatdan o'tkazildi — ${out.attempt}-urinish`;
-  }
-
-  const failNames = out.failed
-    .map((f) => f.name)
-    .slice(0, 5)
-    .join(", ");
-
-  return (
-    `<b>${head}</b>\n` +
-    `Jami: ${out.processed} · Muvaffaqiyatli: ${out.succeeded} · Xato: ${out.failedCount}` +
-    (out.failedCount ? `\n❗ Xatolar: ${esc(failNames)}` : "")
   );
 }
 
@@ -225,6 +196,10 @@ const HELP =
   "/slotcheck — saytda slot ochiqligini tekshirish\n\n" +
   "<b>5️⃣ Buyurtma berish</b>\n" +
   "/order <code>id</code> — 2-bosqich (avval saytda slot ochiqligini tekshiradi)\n\n" +
+  "<b>🕒 Global monitoring</b>\n" +
+  "/monitor <code>2026-06-10 14:30</code> — slot vaqtidan -10/+10 daq oynada har 10 soniyada tekshiradi\n" +
+  "/pause — monitoringni to'xtatib turadi (slot ochilsa ham buyurtma yubormaydi)\n" +
+  "/go — pause'dan chiqarib davom ettiradi\n\n" +
   "<b>6️⃣ PDF olish</b>\n" +
   "/send <code>id</code> — guruh PDF'larini yuborish\n\n" +
   "<b>👤 Arizachi (mijoz):</b>\n" +
@@ -327,16 +302,45 @@ async function handleCommand(text: string): Promise<string> {
       else if (cmd === "order") stage = "order";
       else stage = args[1] === "order" ? "order" : "register";
 
-      const out = await bookGroup(id, stage, "bot");
-      if (!out) return "Guruh topilmadi.";
-      if (out.slotBlocked) {
+      if (stage === "order") {
+        const slot = await checkSlotOpen();
+        if (!slot.open) {
+          return (
+            `⛔ Buyurtma navbatga qo'shilmadi — saytda slot ochiq emas.\n` +
+            `Sabab: ${esc(slot.note)}\n\n` +
+            `Slot ochilishini kuting yoki /slotcheck bilan tekshiring.`
+          );
+        }
+
+        const queued = await enqueueGroupOrder({
+          groupId: id,
+          source: "bot",
+          reason: "bot-order",
+        });
+        if (!queued.queuedJobs) {
+          return `ℹ️ Order navbatga qo'shilmadi (skip: ${queued.skippedJobs}). REGISTERED user yo'q yoki allaqachon navbatda.`;
+        }
         return (
-          `⛔ Buyurtma to'xtatildi — saytda slot ochiq emas.\n` +
-          `Sabab: ${esc(out.slotBlocked)}\n\n` +
-          `Slot ochilishini kuting yoki /slotcheck bilan tekshiring.`
+          `✅ Buyurtma navbatga qo'shildi (#${id})\n` +
+          `Userlar: <b>${queued.queuedJobs}</b> ta (skip: ${queued.skippedJobs})\n` +
+          `10 ta worker alohida Playwright profile'da parallel bajaradi.`
         );
       }
-      return formatBookingResult(out);
+
+      // register — guruhdagi userlar navbatga, 10 worker parallel bajaradi.
+      const queued = await enqueueGroupRegister({
+        groupId: id,
+        source: "bot",
+        reason: "bot-register",
+      });
+      if (!queued.queuedJobs) {
+        return `ℹ️ Register navbatga qo'shilmadi (skip: ${queued.skippedJobs}). Register kutayotgan user yo'q yoki allaqachon navbatda.`;
+      }
+      return (
+        `✅ Ro'yxatdan o'tkazish navbatga qo'shildi (#${id})\n` +
+        `Userlar: <b>${queued.queuedJobs}</b> ta (skip: ${queued.skippedJobs})\n` +
+        `10 ta worker alohida Playwright profile'da parallel bajaradi.`
+      );
     }
 
     case "slot": {
@@ -370,6 +374,71 @@ async function handleCommand(text: string): Promise<string> {
         `Sayt slot holati: ${slot.open ? "🟢 OCHIQ" : "🔴 YOPIQ"}\n` +
         `${esc(slot.note)}`
       );
+    }
+
+    case "monitor": {
+      const raw = args.join(" ").trim();
+      if (!raw) {
+        const [state, queue] = await Promise.all([
+          getSlotMonitorState(),
+          getSlotQueueStats(),
+        ]);
+        return (
+          `<b>Global monitoring holati</b>\n` +
+          `Faol: ${state.active ? "✅" : "❌"} · Pause: ${state.paused ? "✅" : "❌"}\n` +
+          `Slot vaqti: ${state.slotAt ? esc(fmtDate(new Date(state.slotAt))) : "—"}\n` +
+          `Navbat (REGISTERED): ${queue.registeredTotal} ta (${queue.registeredComplete} ta to'liq), guruhlar: ${queue.groups}\n` +
+          `Oxirgi holat: ${esc(state.lastMessage)}`
+        );
+      }
+      const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
+      if (!m) {
+        return (
+          "Foydalanish: /monitor <code>YYYY-MM-DD HH:MM</code>\n" +
+          "Masalan: /monitor <code>2026-06-10 14:30</code>"
+        );
+      }
+      const [, y, mo, d, h, mi] = m;
+      const slotAt = new Date(
+        Number(y),
+        Number(mo) - 1,
+        Number(d),
+        Number(h),
+        Number(mi),
+        0,
+        0,
+      );
+      if (Number.isNaN(slotAt.getTime()) || slotAt.getTime() <= Date.now()) {
+        return "Kelajakdagi to'g'ri vaqt kiriting.";
+      }
+      const state = await setSlotMonitorState({
+        active: true,
+        paused: false,
+        slotAt: slotAt.toISOString(),
+        lastCheckAt: null,
+        lastMessage: "Monitoring ishga tushdi (har 10 soniya)",
+      });
+      return (
+        `✅ Monitoring yoqildi. Slot vaqti: <b>${esc(fmtDate(slotAt))}</b>\n` +
+        "Tizim -10/+10 daqiqa oynada har 10 soniyada slotni tekshiradi."
+      );
+    }
+
+    case "pause": {
+      const state = await setSlotMonitorState({
+        paused: true,
+        lastMessage: "PAUSE: slot monitoring vaqtincha to'xtadi",
+      });
+      return `⏸ Pause yoqildi. Oxirgi holat: ${esc(state.lastMessage)}`;
+    }
+
+    case "go": {
+      const state = await setSlotMonitorState({
+        paused: false,
+        active: true,
+        lastMessage: "GO: monitoring davom etadi",
+      });
+      return `▶️ GO. Monitoring davom etadi. Slot vaqti: ${state.slotAt ? esc(fmtDate(new Date(state.slotAt))) : "—"}`;
     }
 
     case "send": {
@@ -744,14 +813,18 @@ async function handleCallback(cb: import("./telegram").TgCallbackQuery) {
         }
       }
     } else if (action === "reg") {
-      await answerCallbackQuery(cb.id, "Ro'yxatdan o'tkazilmoqda…");
+      await answerCallbackQuery(cb.id, "Navbatga qo'shilmoqda…");
       const groupId = Number(token); // reg:<gid> — token o'rnida gid
-      const out = await bookGroup(groupId, "register", "bot");
-      if (!out) {
-        response = "Guruh topilmadi.";
-      } else {
-        response = formatBookingResult(out);
-      }
+      const queued = await enqueueGroupRegister({
+        groupId,
+        source: "bot",
+        reason: "bot-register-callback",
+      });
+      response = queued.queuedJobs
+        ? `✅ Ro'yxatdan o'tkazish navbatga qo'shildi — guruh #${groupId}\n` +
+          `Userlar: <b>${queued.queuedJobs}</b> ta (skip: ${queued.skippedJobs})\n` +
+          `10 ta worker parallel bajaradi.`
+        : `ℹ️ Navbatga qo'shilmadi (skip: ${queued.skippedJobs}). Register kutayotgan user yo'q.`;
       await editMessageText(chatId, messageId, response);
     } else {
       await answerCallbackQuery(cb.id);
@@ -892,9 +965,29 @@ export async function runBotPolling(): Promise<void> {
   );
 
   let offset = 0;
+  let lastMonitorTick = 0;
+  let lastMonitorBroadcast = "";
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      const now = Date.now();
+      if (now - lastMonitorTick >= 10_000) {
+        lastMonitorTick = now;
+        const tick = await runSlotMonitorTick();
+        if (tick.queued) {
+          const msg =
+            `🟢 Slot ochildi va global order queue ishladi\n` +
+            `Guruhlar: ${tick.queued.groups}\n` +
+            `Queue'ga yuborildi: ${tick.queued.queued}, skip: ${tick.queued.skipped}`;
+          if (msg !== lastMonitorBroadcast) {
+            lastMonitorBroadcast = msg;
+            for (const adminId of getAdminChatIds()) {
+              await sendMessage(adminId, msg).catch(() => {});
+            }
+          }
+        }
+      }
+
       const updates = await getUpdates(offset, 30);
       for (const u of updates) {
         offset = u.update_id + 1;

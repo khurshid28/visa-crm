@@ -45,7 +45,10 @@ export default async function GroupsPage({
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * PER_PAGE,
       take: PER_PAGE,
-      include: { _count: { select: { applicants: true } } },
+      include: {
+        _count: { select: { applicants: true } },
+        applicants: { select: { status: true, complete: true } },
+      },
     }),
   ]);
 
@@ -74,6 +77,7 @@ export default async function GroupsPage({
             <tr>
               <th>Nomi</th>
               <th>Arizachilar</th>
+              <th>To'liq / Registered</th>
               <th>Status</th>
               <th>Sana</th>
               <th></th>
@@ -82,10 +86,17 @@ export default async function GroupsPage({
           <tbody>
             {groups.map((g) => {
               const meta = GROUP_STATUS[g.status];
+              const complete = g.applicants.filter((a) => a.complete).length;
+              const registered = g.applicants.filter(
+                (a) => a.status === "REGISTERED",
+              ).length;
               return (
                 <tr key={g.id}>
                   <td className="font-medium text-slate-800">{g.name}</td>
                   <td>{g._count.applicants}</td>
+                  <td>
+                    {complete} / {registered}
+                  </td>
                   <td>
                     <span className={`badge ${meta.cls}`}>{meta.label}</span>
                   </td>
@@ -106,7 +117,7 @@ export default async function GroupsPage({
             })}
             {groups.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-10 text-center text-slate-400">
+                <td colSpan={6} className="py-10 text-center text-slate-400">
                   {q || status
                     ? "Filtrga mos guruh topilmadi"
                     : "Hali guruh yo'q. Yuqoridan Excel yuklang."}

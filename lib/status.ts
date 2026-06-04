@@ -2,9 +2,13 @@ export const GROUP_STATUS: Record<string, { label: string; cls: string }> = {
   PENDING: { label: "Kutilyapti", cls: "bg-slate-100 text-slate-700" },
   READY: { label: "Tayyor", cls: "bg-blue-100 text-blue-700" },
   SLOT_OPEN: { label: "Slot ochiq", cls: "bg-green-100 text-green-700" },
-  SLOT_CLOSED: { label: "Slot yopiq", cls: "bg-amber-100 text-amber-700" },
+  SLOT_CLOSED: {
+    label: "Slot ochilishini kutilmoqda",
+    cls: "bg-amber-100 text-amber-700",
+  },
   BOOKING: { label: "Zakas qilinyapti", cls: "bg-brand-100 text-brand-700" },
   DONE: { label: "Tugadi", cls: "bg-emerald-100 text-emerald-700" },
+  PAUSED: { label: "Pause", cls: "bg-rose-100 text-rose-700" },
   ARCHIVED: { label: "Arxivlangan", cls: "bg-slate-200 text-slate-500" },
 };
 

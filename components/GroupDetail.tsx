@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -60,6 +60,22 @@ type Group = {
   applicants: Applicant[];
 };
 
+type SlotMonitorState = {
+  active: boolean;
+  paused: boolean;
+  slotAt: string | null;
+  intervalSeconds: number;
+  windowMinutes: number;
+  lastCheckAt: string | null;
+  lastMessage: string;
+};
+
+type SlotQueue = {
+  groups: number;
+  registeredTotal: number;
+  registeredComplete: number;
+};
+
 export default function GroupDetail({ group }: { group: Group }) {
   const router = useRouter();
   const { toast, confirm } = useToast();
@@ -69,7 +85,71 @@ export default function GroupDetail({ group }: { group: Group }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
+  const [monitor, setMonitor] = useState<SlotMonitorState | null>(null);
+  const [queue, setQueue] = useState<SlotQueue | null>(null);
   const PER_PAGE = 10;
+
+  async function refreshMonitor() {
+    try {
+      const res = await fetch("/api/slot-monitor", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) return;
+      setMonitor(data.state ?? null);
+      setQueue(data.queue ?? null);
+    } catch {
+      // UI ishlashini buzmaymiz.
+    }
+  }
+
+  async function monitorAction(action: "configure" | "pause" | "go" | "tick") {
+    try {
+      const body: Record<string, unknown> = { action };
+      if (action === "configure") {
+        const v = window.prompt(
+          "Slot vaqti (YYYY-MM-DD HH:MM):",
+          new Date(Date.now() + 30 * 60_000)
+            .toISOString()
+            .slice(0, 16)
+            .replace("T", " "),
+        );
+        if (!v) return;
+        const m = v.trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
+        if (!m) {
+          toast("Vaqt formati noto'g'ri", "error");
+          return;
+        }
+        const [, y, mo, d, h, mi] = m;
+        body.slotAt = new Date(
+          Number(y),
+          Number(mo) - 1,
+          Number(d),
+          Number(h),
+          Number(mi),
+          0,
+          0,
+        ).toISOString();
+      }
+
+      const res = await fetch("/api/slot-monitor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) throw new Error(data?.error ?? "Amal bajarilmadi");
+
+      if (action !== "tick") {
+        toast("Monitoring holati yangilandi");
+      }
+      await refreshMonitor();
+      if (action === "tick") router.refresh();
+    } catch (e) {
+      toast(
+        `Amal bajarilmadi: ${e instanceof Error ? e.message : "xato"}`,
+        "error",
+      );
+    }
+  }
 
   async function bookGroup(stage: "register" | "order") {
     setBusyId("group");
@@ -81,6 +161,20 @@ export default function GroupDetail({ group }: { group: Group }) {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data) throw new Error();
+
+      if (stage === "order") {
+        if (data.slotBlocked) {
+          toast(`Slot yopiq: ${data.slotBlocked}`, "error");
+          return;
+        }
+        if (data.queued) {
+          toast("Buyurtma navbatga qo'shildi (worker bajaradi)");
+        } else {
+          toast(data.note || "Buyurtma navbatga qo'shilmadi", "error");
+        }
+        router.refresh();
+        return;
+      }
 
       const action = stage === "register" ? "ro'yxatdan o'tkazish" : "buyurtma";
       const failed: { name: string; passportNumber: string; note: string }[] =
@@ -118,12 +212,20 @@ export default function GroupDetail({ group }: { group: Group }) {
       const data = await res.json().catch(() => null);
       if (!res.ok || !data) throw new Error();
 
+      if (stage === "order") {
+        if (data.slotBlocked) {
+          toast(`Slot yopiq: ${data.slotBlocked}`, "error");
+        } else if (data.queued) {
+          toast("Buyurtma navbatga qo'shildi (worker bajaradi)");
+        } else {
+          toast(data.note || "Buyurtma navbatga qo'shilmadi", "error");
+        }
+        router.refresh();
+        return;
+      }
+
       if (data.ok) {
-        toast(
-          stage === "register"
-            ? "Arizachi ro'yxatdan o'tkazildi"
-            : "Arizachiga buyurtma berildi",
-        );
+        toast("Arizachi ro'yxatdan o'tkazildi");
       } else {
         const note = data.automation?.note || "Avtomatlashtirish xatosi";
         toast(`Xato: ${note}`, "error");
@@ -220,6 +322,7 @@ export default function GroupDetail({ group }: { group: Group }) {
     (a) => a.status === "ORDERED" || a.status === "BOOKED",
   ).length;
   const completeCount = group.applicants.filter((a) => a.complete).length;
+  const waitingSlot = registered > 0 && ordered === 0;
 
   const q = search.trim().toLowerCase();
   const filtered = group.applicants.filter((a) => {
@@ -248,6 +351,18 @@ export default function GroupDetail({ group }: { group: Group }) {
     setPage(1);
   }, [search, statusFilter]);
 
+  useEffect(() => {
+    refreshMonitor();
+    const id = window.setInterval(async () => {
+      if (monitor?.active) {
+        await monitorAction("tick");
+      } else {
+        await refreshMonitor();
+      }
+    }, 10_000);
+    return () => window.clearInterval(id);
+  }, [monitor?.active]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -262,7 +377,7 @@ export default function GroupDetail({ group }: { group: Group }) {
             </div>
             <p className="mt-1 text-sm text-white/70">
               {total} arizachi
-              {group.fileName ? ` · ${group.fileName}` : ""}
+              {group.fileName ? ` - ${group.fileName}` : ""}
             </p>
           </div>
 
@@ -298,7 +413,29 @@ export default function GroupDetail({ group }: { group: Group }) {
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand-100 text-[11px] font-bold text-brand-700">
                 2
               </span>
-              {busyId === "group" ? "Yuborilyapti..." : "Buyurtma berish"}
+              {busyId === "group" ? "Yuborilyapti..." : "GO / Buyurtma"}
+            </button>
+
+            <button
+              className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2.5 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all hover:bg-white/25 active:scale-95"
+              onClick={() => monitorAction("configure")}
+              title="Global monitor vaqtini belgilash"
+            >
+              Monitor vaqti
+            </button>
+            <button
+              className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2.5 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all hover:bg-white/25 active:scale-95"
+              onClick={() => monitorAction("pause")}
+              title="Pause: slot ochilsa ham buyurtma berilmasin"
+            >
+              Pause
+            </button>
+            <button
+              className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2.5 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur transition-all hover:bg-white/25 active:scale-95"
+              onClick={() => monitorAction("go")}
+              title="GO: monitoringni davom ettirish"
+            >
+              Go
             </button>
 
             <div className="mx-1 h-7 w-px bg-white/20" />
@@ -336,6 +473,16 @@ export default function GroupDetail({ group }: { group: Group }) {
           <HeaderStat label="To'liq" value={completeCount} />
           <HeaderStat label="Ro'yxatdan o'tgan" value={registered} />
           <HeaderStat label="Buyurtma berilgan" value={ordered} />
+        </div>
+        <div className="border-t border-white/15 px-6 py-3 text-xs text-white/80">
+          {waitingSlot ? "Slot ochilishini kutilmoqda" : "Jarayon holati"}
+          {queue
+            ? ` · Umumiy REGISTERED: ${queue.registeredTotal} ta, to'liq: ${queue.registeredComplete} ta, guruhlar: ${queue.groups}`
+            : ""}
+          {monitor?.paused ? " · STATUS: PAUSE" : ""}
+          {monitor?.active && monitor?.slotAt
+            ? ` · Slot vaqti: ${new Date(monitor.slotAt).toLocaleString("uz-UZ")}`
+            : ""}
         </div>
       </div>
 
@@ -422,7 +569,7 @@ export default function GroupDetail({ group }: { group: Group }) {
                     {a.passportNumber}
                   </td>
                   <td className="px-4 py-3 text-slate-600">
-                    {a.birthdate || "—"}
+                    {a.birthdate || "тАФ"}
                   </td>
                   <td className="px-4 py-3">
                     {a.generatedEmail ? (
@@ -431,7 +578,7 @@ export default function GroupDetail({ group }: { group: Group }) {
                         {a.generatedEmail}
                       </span>
                     ) : (
-                      <span className="text-slate-300">—</span>
+                      <span className="text-slate-300">тАФ</span>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -537,7 +684,7 @@ export default function GroupDetail({ group }: { group: Group }) {
               <span className="font-medium text-slate-600">
                 {filtered.length}
               </span>{" "}
-              ta · {safePage}/{totalPages}-sahifa
+              ta ┬╖ {safePage}/{totalPages}-sahifa
             </p>
             <div className="flex items-center gap-1">
               <button
@@ -562,7 +709,7 @@ export default function GroupDetail({ group }: { group: Group }) {
                     <span key={p} className="flex items-center">
                       {gap && (
                         <span className="px-1.5 text-sm text-slate-400">
-                          …
+                          тАж
                         </span>
                       )}
                       <button
@@ -665,14 +812,14 @@ function EditModal({
   }
 
   function fillFromPassport(p: PassportFields) {
-    // Excel'dagi pasport bilan solishtiramiz. Mos kelmasa — formani
+    // Excel'dagi pasport bilan solishtiramiz. Mos kelmasa тАФ formani
     // o'zgartirmaymiz va ogohlantiramiz (boshqa odamning passporti bo'lishi mumkin).
     const norm = (s: string) => (s || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
     const scanned = norm(p.passportNumber);
     const existing = norm(applicant.passportNumber);
     if (existing && scanned && scanned !== existing) {
       toast(
-        `Pasport mos kelmadi: Excel ${applicant.passportNumber} ≠ skan ${p.passportNumber}`,
+        `Pasport mos kelmadi: Excel ${applicant.passportNumber} тЙа skan ${p.passportNumber}`,
         "error",
       );
       return;
@@ -687,7 +834,7 @@ function EditModal({
       gender: p.gender || f.gender,
       passportValidity: p.passportValidity || f.passportValidity,
     }));
-    toast("Pasport mos keldi — forma to'ldirildi");
+    toast("Pasport mos keldi тАФ forma to'ldirildi");
   }
 
   async function save() {
@@ -724,7 +871,7 @@ function EditModal({
           body: fd,
         });
       }
-      // Standartlashtirilgan portret (600x600 JPEG) — shaxs bazasiga.
+      // Standartlashtirilgan portret (600x600 JPEG) тАФ shaxs bazasiga.
       if (personPhoto) {
         const fd = new FormData();
         fd.append("file", personPhoto);
@@ -752,14 +899,14 @@ function EditModal({
               Arizachini tahrirlash
             </h3>
             <p className="text-xs text-slate-400">
-              Status tizim tomonidan boshqariladi — bu yerda faqat ma'lumotlar.
+              Status tizim tomonidan boshqariladi тАФ bu yerda faqat ma'lumotlar.
             </p>
           </div>
           <button
             onClick={onClose}
             className="rounded-lg px-2 py-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
           >
-            ✕
+            тЬХ
           </button>
         </div>
 
@@ -1015,7 +1162,7 @@ function AddModal({
             onClick={onClose}
             className="rounded-lg px-2 py-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
           >
-            ✕
+            тЬХ
           </button>
         </div>
 

@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Category, Profile2User, People } from "iconsax-react";
+import { Category, Profile2User, People, Chart } from "iconsax-react";
 
 const LINKS = [
   { href: "/dashboard", label: "Boshqaruv paneli", icon: Category },
   { href: "/groups", label: "Guruhlar", icon: Profile2User },
   { href: "/users", label: "Userlar", icon: People },
+  { href: "/monitoring", label: "Monitoring", icon: Chart },
 ];
 
 export default function SidebarNav() {
