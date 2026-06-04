@@ -355,48 +355,7 @@ export default function SlotMonitorModal({
               accent="brand"
             />
 
-            {/* Davomiylik (slot oynasi) */}
-            <div className="mt-3">
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Davomiyligi (slot qancha ochiq turadi)
-              </label>
-              <div className="flex flex-wrap gap-1.5">
-                {[
-                  { label: "2 daq", min: 2 },
-                  { label: "5 daq", min: 5 },
-                  { label: "10 daq", min: 10 },
-                  { label: "15 daq", min: 15 },
-                  { label: "20 daq", min: 20 },
-                  { label: "30 daq", min: 30 },
-                  { label: "1 soat", min: 60 },
-                  { label: "2 soat", min: 120 },
-                ].map((w) => (
-                  <button
-                    key={w.min}
-                    onClick={() => setWindowMin(w.min)}
-                    className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition active:scale-95 ${
-                      windowMin === w.min
-                        ? "bg-brand-600 text-white shadow-sm"
-                        : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-                    }`}
-                  >
-                    {w.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                onClick={startMonitor}
-                disabled={busy}
-                className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 active:scale-95 disabled:opacity-60"
-              >
-                <CalendarTick size={16} variant="Bold" />
-                O'rnatish
-              </button>
-            </div>
-            {/* Tez tanlash presetlari */}
+            {/* Tez tanlash presetlari — kalendardan keyin */}
             <div className="mt-2.5 flex flex-wrap gap-1.5">
               {[
                 { label: "+15 daq", min: 15 },
@@ -420,6 +379,47 @@ export default function SlotMonitorModal({
                 </button>
               ))}
             </div>
+
+            {/* Davomiylik (slot oynasi) — ajratilgan bo'lim */}
+            <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-800/30">
+              <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                <Clock size={13} /> Slot qancha vaqt ochiq turadi
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: "2 daq", min: 2 },
+                  { label: "5 daq", min: 5 },
+                  { label: "10 daq", min: 10 },
+                  { label: "15 daq", min: 15 },
+                  { label: "20 daq", min: 20 },
+                  { label: "30 daq", min: 30 },
+                  { label: "1 soat", min: 60 },
+                  { label: "2 soat", min: 120 },
+                ].map((w) => (
+                  <button
+                    key={w.min}
+                    onClick={() => setWindowMin(w.min)}
+                    className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition active:scale-95 ${
+                      windowMin === w.min
+                        ? "bg-brand-600 text-white shadow-sm"
+                        : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-700"
+                    }`}
+                  >
+                    {w.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* O'rnatish — eng oxirida, chiroyli to'liq tugma */}
+            <button
+              onClick={startMonitor}
+              disabled={busy}
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-brand-600 to-brand-500 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-brand-500/20 transition hover:from-brand-700 hover:to-brand-600 hover:shadow-lg active:scale-[0.98] disabled:opacity-60"
+            >
+              <CalendarTick size={18} variant="Bold" />
+              {busy ? "O'rnatilmoqda..." : "O'rnatish"}
+            </button>
           </div>
 
           <div className="flex flex-wrap gap-2">
