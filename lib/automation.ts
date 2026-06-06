@@ -267,9 +267,43 @@ async function openBrowserContext(
   const proxyCountry = proxyTarget ? proxyMetaFor(proxyTarget)?.country : null;
   const fp = fingerprintOptions(proxyCountry);
 
+  // Tizimdagi haqiqiy Chrome (kanal) ishlatish — .env: BOOKING_BROWSER_CHANNEL=chrome
+  // (yoki "msedge"). Bo'sh bo'lsa Playwright'ning ichki chromium'i ishlatiladi.
+  const channel = (process.env.BOOKING_BROWSER_CHANNEL || "").trim();
+
+  // Haqiqiy Chrome profili (khurshidi2827@gmail.com kabi) bilan kirish:
+  //   BOOKING_CHROME_USER_DATA_DIR = "C:/Users/PC/AppData/Local/Google/Chrome/User Data"
+  //   BOOKING_CHROME_PROFILE       = "Default" yoki "Profile 1" ...
+  // DIQQAT: bu rejimda Chrome TO'LIQ yopilgan bo'lishi kerak (profil qulflanadi).
+  const realUserDataDir = (
+    process.env.BOOKING_CHROME_USER_DATA_DIR || ""
+  ).trim();
+  const realProfile = (process.env.BOOKING_CHROME_PROFILE || "").trim();
+
+  if (realUserDataDir) {
+    const args = [...launchArgs()];
+    if (realProfile) args.push(`--profile-directory=${realProfile}`);
+    const context = await chromium.launchPersistentContext(realUserDataDir, {
+      headless: envHeadless(),
+      channel: channel || "chrome",
+      args,
+      ...(proxy ? { proxy } : {}),
+      viewport: fp.viewport,
+      timezoneId: fp.timezoneId,
+      locale: fp.locale,
+      extraHTTPHeaders: fp.extraHTTPHeaders,
+    });
+    await applyStealthInit(context, fp.extraHTTPHeaders["Accept-Language"]);
+    return {
+      context,
+      close: async () => context.close(),
+    };
+  }
+
   if (profileDir) {
     const context = await chromium.launchPersistentContext(profileDir, {
       headless: envHeadless(),
+      ...(channel ? { channel } : {}),
       args: launchArgs(),
       ...(proxy ? { proxy } : {}),
       userAgent: fp.userAgent,
@@ -288,6 +322,7 @@ async function openBrowserContext(
 
   const browser = await chromium.launch({
     headless: envHeadless(),
+    ...(channel ? { channel } : {}),
     args: launchArgs(),
     ...(proxy ? { proxy } : {}),
   });
@@ -434,7 +469,230 @@ export async function checkSlotOpen(): Promise<SlotCheckResult> {
   }
 }
 
-/** Sahifa matnidan tasdiqlash / appointment raqamini ajratib oladi. */
+export type LoginResult = {
+  ok: boolean; // login muvaffaqiyatli bo'ldimi (taxminiy belgilar bo'yicha)
+  note: string;
+  url: string; // login URL
+  finalUrl: string; // login bosgandan keyingi URL
+  captchaPresent: boolean;
+  captchaSolved: boolean;
+  filledEmail: boolean;
+  filledPassword: boolean;
+  submitted: boolean;
+  exitIp: string | null;
+  statusCode: number | null;
+  pageError: string | null;
+};
+
+/**
+ * Booking saytiga LOGIN qiladi (BOOKING_LOGIN_URL). Proxy (sticky, email bo'yicha)
+ * + stealth + IP'ga mos timezone/til + Turnstile token kutish — hammasi ishlatiladi.
+ * Angular Material formasi: email=#email (formcontrolname=username),
+ * password=#password (formcontrolname=password), tugma "Sign In".
+ * Hech qachon exception tashlamaydi — natija obyektini qaytaradi.
+ */
+export async function loginToBooking(
+  email: string,
+  password: string,
+  opts?: { profileKey?: string | null; onStep?: (msg: string) => void },
+): Promise<LoginResult> {
+  const step = (msg: string) => {
+    try {
+      opts?.onStep?.(msg);
+    } catch {
+      /* ignore */
+    }
+  };
+  const url = (process.env.BOOKING_LOGIN_URL || "").trim();
+  const base: LoginResult = {
+    ok: false,
+    note: "",
+    url,
+    finalUrl: "",
+    captchaPresent: false,
+    captchaSolved: false,
+    filledEmail: false,
+    filledPassword: false,
+    submitted: false,
+    exitIp: null,
+    statusCode: null,
+    pageError: null,
+  };
+  if (!url) {
+    return { ...base, note: "URL sozlanmagan (.env: BOOKING_LOGIN_URL)" };
+  }
+
+  const pageErrors: string[] = [];
+  let closeSession: (() => Promise<void>) | null = null;
+  // Sticky proxy: shu user (email) doim bir xil IP oladi.
+  const profileKey = opts?.profileKey || email;
+
+  try {
+    const session = await openBrowserContext(
+      profileDirFor("login", profileKey),
+      { profileKey },
+    );
+    closeSession = session.close;
+    step("Brauzer ochildi (stealth + proxy)");
+
+    const page: import("playwright").Page = await session.context.newPage();
+    page.on("pageerror", (e) => {
+      pageErrors.push(`JS: ${e.message}`.slice(0, 200));
+    });
+    page.on("response", (res) => {
+      const s = res.status();
+      if (s >= 400) {
+        pageErrors.push(`HTTP ${s}: ${res.url().slice(0, 80)}`.slice(0, 200));
+      }
+    });
+
+    // Warmup: avval asosiy sahifani ochamiz (region cookie/sessiya o'rnatadi va
+    // Cloudflare'ni yengilroq sahifada o'taymiz). .env: BOOKING_WARMUP_URL.
+    const warmupUrl = (process.env.BOOKING_WARMUP_URL || "").trim();
+    if (warmupUrl) {
+      step("Asosiy sahifa (warmup) ochilmoqda...");
+      await page
+        .goto(warmupUrl, { waitUntil: "domcontentloaded", timeout: 45000 })
+        .catch(() => {});
+      await waitForCloudflareClear(page, step);
+      await humanPause(800, 1600);
+      step("Warmup tugadi, login sahifasiga o'tilmoqda...");
+    }
+
+    step("Login sahifasi ochilmoqda...");
+    const response = await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 45000,
+    });
+    base.statusCode = response ? response.status() : null;
+    await page
+      .waitForLoadState("networkidle", { timeout: 10000 })
+      .catch(() => {});
+    step(`Sahifa ochildi (HTTP ${base.statusCode ?? "?"})`);
+
+    if (shouldLogExitIp()) {
+      base.exitIp = await readExitIp(page);
+      step(`Exit IP: ${base.exitIp || "—"}`);
+    }
+
+    // Cloudflare interstitial ("Just a moment" / "Checking your browser") bo'lsa
+    // — JS challenge avtomatik hal bo'lishini kutamiz (managed challenge).
+    const cleared = await waitForCloudflareClear(page, step);
+    if (!cleared) {
+      pageErrors.push("cloudflare: challenge hal bo'lmadi (403/blok)");
+    }
+
+    // EMAIL — Angular Material: ko'rinadigan input #email (yashirin #username emas).
+    const emailSel = '#email, input[formcontrolname="username"]';
+    await page
+      .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
+      .catch(() => {});
+    const emailEl = page.locator(emailSel).first();
+    if ((await emailEl.count()) > 0) {
+      await emailEl.click({ timeout: 5000 }).catch(() => {});
+      await emailEl.fill("", { timeout: 3000 }).catch(() => {});
+      await emailEl.type(email, { delay: rand(50, 120), timeout: 10000 });
+      base.filledEmail = true;
+      step("Email kiritildi");
+    } else {
+      step("Email maydoni topilmadi!");
+    }
+    await humanPause();
+
+    // PASSWORD — ko'rinadigan input #password (yashirin #password1 emas).
+    const passSel = '#password, input[formcontrolname="password"]';
+    const passEl = page.locator(passSel).first();
+    if ((await passEl.count()) > 0) {
+      await passEl.click({ timeout: 5000 }).catch(() => {});
+      await passEl.fill("", { timeout: 3000 }).catch(() => {});
+      await passEl.type(password, { delay: rand(50, 120), timeout: 10000 });
+      base.filledPassword = true;
+      step("Parol kiritildi");
+    } else {
+      step("Parol maydoni topilmadi!");
+    }
+    await humanPause();
+
+    // Cloudflare Turnstile — token to'lguncha kutamiz.
+    step("Cloudflare Turnstile tekshirilmoqda...");
+    const captcha = await waitForTurnstile(page);
+    base.captchaPresent = captcha.present;
+    base.captchaSolved = captcha.solved;
+    if (captcha.present) {
+      step(captcha.solved ? "Captcha o'tdi ✓" : "Captcha o'tmadi ✗");
+    } else {
+      step("Captcha yo'q (bu sahifada)");
+    }
+    if (captcha.present && !captcha.solved) {
+      pageErrors.push("turnstile: token kutib olinmadi");
+    }
+
+    await humanPause(400, 900);
+
+    // "Sign In" tugmasini bosamiz.
+    const signInBtn = page
+      .locator(
+        'button:has-text("Sign In"), button:has-text("Sign in"), button[type="submit"]',
+      )
+      .first();
+    if ((await signInBtn.count()) > 0) {
+      await signInBtn.click({ timeout: 8000 }).catch(() => {});
+      base.submitted = true;
+      step("Sign In bosildi");
+    } else {
+      step("Sign In tugmasi topilmadi!");
+    }
+
+    // Login natijasini kutamiz (navigatsiya yoki xato xabari).
+    step("Natija kutilmoqda...");
+    await page
+      .waitForLoadState("networkidle", { timeout: 15000 })
+      .catch(() => {});
+    await page.waitForTimeout(1500).catch(() => {});
+
+    base.finalUrl = page.url();
+    const bodyText = (
+      (await page
+        .locator("body")
+        .innerText()
+        .catch(() => "")) || ""
+    ).toLowerCase();
+
+    // Login muvaffaqiyatini taxminiy aniqlaymiz: URL o'zgardi (login sahifasidan
+    // chiqdi) yoki xato xabari yo'q.
+    const stillOnLogin = /login|sign\s*in/.test(base.finalUrl.toLowerCase());
+    const hasError = /invalid|incorrect|wrong|failed|error|noto'g'ri|xato/.test(
+      bodyText,
+    );
+    base.ok = base.submitted && !hasError && !stillOnLogin;
+
+    base.note = base.ok
+      ? "Login muvaffaqiyatli (taxminiy)"
+      : hasError
+        ? "Login xato xabari aniqlandi"
+        : stillOnLogin
+          ? "Hali login sahifasida (parol/captcha tekshiring)"
+          : "Login holati noaniq";
+
+    await closeSession();
+    closeSession = null;
+
+    base.pageError = pageErrors.length
+      ? pageErrors.slice(0, 10).join(" | ")
+      : null;
+    return base;
+  } catch (err) {
+    if (closeSession) await closeSession().catch(() => {});
+    const msg = err instanceof Error ? err.message : String(err);
+    pageErrors.push(`FATAL: ${msg}`.slice(0, 200));
+    return {
+      ...base,
+      note: `Login xatosi: ${msg.slice(0, 200)}`,
+      pageError: pageErrors.slice(0, 10).join(" | "),
+    };
+  }
+}
+
 function extractRef(text: string): string | null {
   const patterns = [
     /(?:appointment|booking|reference|confirmation|ref|tasdiq|buyurtma)\D{0,12}([A-Z0-9]{5,})/i,
@@ -970,13 +1228,64 @@ async function fillSmartField(
 }
 
 /**
+ * Cloudflare "Just a moment" / "Checking your browser" interstitial (managed
+ * challenge) hal bo'lishini kutadi. Sahifa challenge'da bo'lsa, JS challenge
+ * avtomatik bajarilib, asl sahifaga o'tishini kutamiz. Hech qachon throw qilmaydi.
+ *  - true: challenge yo'q yoki hal bo'ldi (asl sahifa ko'rindi).
+ *  - false: vaqt tugadi, hali ham challenge/blokda.
+ */
+async function waitForCloudflareClear(
+  page: import("playwright").Page,
+  step?: (m: string) => void,
+): Promise<boolean> {
+  const timeoutMs = Number(
+    process.env.BOOKING_CF_CHALLENGE_TIMEOUT_MS || "45000",
+  );
+  const isChallenge = async (): Promise<boolean> => {
+    try {
+      return await page.evaluate(() => {
+        const t = (document.title || "").toLowerCase();
+        const b = (document.body?.innerText || "").toLowerCase();
+        const marks = [
+          "just a moment",
+          "checking your browser",
+          "verify you are human",
+          "needs to review the security",
+          "attention required",
+        ];
+        const hit = marks.some((m) => t.includes(m) || b.includes(m));
+        // Challenge sahifasida odatda asosiy app (app-login/app-root) bo'lmaydi.
+        const hasApp = !!document.querySelector(
+          "app-login, app-root, #email, form",
+        );
+        return hit && !hasApp;
+      });
+    } catch {
+      return false;
+    }
+  };
+
+  if (!(await isChallenge())) return true;
+  step?.("Cloudflare challenge aniqlandi, hal bo'lishi kutilmoqda...");
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(2000).catch(() => {});
+    if (!(await isChallenge())) {
+      step?.("Cloudflare challenge hal bo'ldi ✓");
+      // App to'liq yuklanishi uchun biroz kutamiz.
+      await page
+        .waitForLoadState("networkidle", { timeout: 8000 })
+        .catch(() => {});
+      return true;
+    }
+  }
+  step?.("Cloudflare challenge hal bo'lmadi ✗");
+  return false;
+}
+
+/**
  * Cloudflare Turnstile captcha'ni aniqlaydi va token to'lguncha kutadi.
- *  - present: sahifada Turnstile widget bor-yo'qligi.
- *  - solved: token (cf-turnstile-response) to'ldirildimi (captcha o'tdimi).
- *
- *  Turnstile odatda "managed/non-interactive" rejimda — toza brauzer + yaxshi
- *  IP bo'lsa o'zi avtomatik o'tadi. Biz faqat token to'lguncha kutamiz, shunda
- *  forma yuborilganda token amal qiladi. Hech qachon exception tashlamaydi.
  */
 async function waitForTurnstile(
   page: import("playwright").Page,
