@@ -339,6 +339,7 @@ model SlotMonitor {
 // "bitta slot hammaga ta'sir qiladi" — shuning uchun har bir o'zgarish loglanadi.
 model SlotEvent {
   id          Int       @id @default(autoincrement())
+  slotId      Int? // qaysi slot (ko'p slotli tizimda). null = global monitor
   type        String // configure | open | close | pause | go | stop | check | expired
   slotAt      DateTime? // o'sha paytdagi belgilangan slot vaqti
   closeAt     DateTime? // yopilish vaqti (bo'lsa)
@@ -353,4 +354,5 @@ model SlotEvent {
 
   @@index([type])
   @@index([createdAt])
+  @@index([slotId])
 }

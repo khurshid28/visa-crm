@@ -10,6 +10,7 @@ import UserViewButton from "@/components/UserViewButton";
 import StatusBadge from "@/components/StatusBadge";
 import CredentialCell from "@/components/CredentialCell";
 import { buildPassword } from "@/lib/email";
+import { countryName, countryIso2 } from "@/lib/options";
 import { fmtDateTime } from "@/lib/date";
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,15 @@ export default async function UsersPage({
       orderBy: { id: "desc" },
       skip: (page - 1) * PER_PAGE,
       take: PER_PAGE,
-      include: { group: { select: { id: true, name: true } } },
+      include: {
+        group: {
+          select: {
+            id: true,
+            name: true,
+            slot: { select: { fromCountry: true, toCountry: true } },
+          },
+        },
+      },
     }),
   ]);
 
@@ -101,6 +110,7 @@ export default async function UsersPage({
               <th>Pasport</th>
               <th>Tizim email / Parol</th>
               <th>Guruh</th>
+              <th>Yo'nalish</th>
               <th>Status</th>
               <th>Sana</th>
               <th></th>
@@ -149,6 +159,38 @@ export default async function UsersPage({
                       </Link>
                     ) : (
                       <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td>
+                    {a.group?.slot ? (
+                      <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
+                        {countryIso2(a.group.slot.fromCountry) && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={`https://flagcdn.com/${countryIso2(
+                              a.group.slot.fromCountry,
+                            ).toLowerCase()}.svg`}
+                            alt=""
+                            className="h-[13px] w-[18px] rounded-sm object-cover ring-1 ring-black/5"
+                          />
+                        )}
+                        <span className="text-brand-500">→</span>
+                        {countryIso2(a.group.slot.toCountry) && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={`https://flagcdn.com/${countryIso2(
+                              a.group.slot.toCountry,
+                            ).toLowerCase()}.svg`}
+                            alt=""
+                            className="h-[13px] w-[18px] rounded-sm object-cover ring-1 ring-black/5"
+                          />
+                        )}
+                        {countryName(a.group.slot.toCountry)}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-300 dark:text-slate-600">
+                        —
+                      </span>
                     )}
                   </td>
                   <td>
@@ -202,7 +244,7 @@ export default async function UsersPage({
             {applicants.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="py-12 text-center text-sm text-slate-400"
                 >
                   <People

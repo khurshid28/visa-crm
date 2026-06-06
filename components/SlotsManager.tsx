@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Add,
   ArrowRight2,
@@ -11,6 +11,8 @@ import {
   Pause,
   Stop,
   Calendar as CalendarIcon,
+  Setting4,
+  TickCircle,
   Profile2User,
   People,
 } from "iconsax-react";
@@ -40,10 +42,74 @@ function Flag({ code, size = 22 }: { code: string; size?: number }) {
   );
 }
 
-export default function SlotsManager({ slots }: { slots: SlotView[] }) {
+function pad2(n: number): string {
+  return String(Math.floor(n)).padStart(2, "0");
+}
+
+export default function SlotsManager({
+  slots: initial,
+}: {
+  slots: SlotView[];
+}) {
   const router = useRouter();
+  const [slots, setSlots] = useState<SlotView[]>(initial);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<SlotView | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  const ticking = useRef(false);
+
+  // Server'dan slotlarni 5 soniyada yangilab turamiz.
+  async function refresh() {
+    try {
+      const res = await fetch("/api/slots", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.slots) setSlots(data.slots as SlotView[]);
+    } catch {
+      // jim
+    }
+  }
+
+  useEffect(() => {
+    const id = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Faol (active && !paused) slotlar uchun monitoring tick'ini yuritamiz.
+  useEffect(() => {
+    const id = window.setInterval(async () => {
+      if (ticking.current) return;
+      const live = slots.filter((s) => s.active && !s.paused);
+      if (live.length === 0) return;
+      ticking.current = true;
+      try {
+        await Promise.all(
+          live.map((s) =>
+            fetch(`/api/slots/${s.id}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "tick" }),
+            }).catch(() => {}),
+          ),
+        );
+        await refresh();
+      } finally {
+        ticking.current = false;
+      }
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [slots]);
+
+  async function control(id: number, action: "go" | "pause" | "stop") {
+    setBusy(id);
+    await fetch(`/api/slots/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    }).catch(() => {});
+    setBusy(null);
+    await refresh();
+    router.refresh();
+  }
 
   return (
     <div className="space-y-5">
@@ -53,7 +119,7 @@ export default function SlotsManager({ slots }: { slots: SlotView[] }) {
             Slotlar
           </h1>
           <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-            Yo'nalishlar bo'yicha slotlar. Har bir slotga guruhlar bog'lanadi.
+            Yo'nalishlar bo'yicha slotlar. Har biri mustaqil monitoring qiladi.
           </p>
         </div>
         <button
@@ -83,26 +149,30 @@ export default function SlotsManager({ slots }: { slots: SlotView[] }) {
               key={s.id}
               slot={s}
               busy={busy === s.id}
-              onAction={async (action) => {
-                setBusy(s.id);
-                await fetch(`/api/slots/${s.id}`, {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ action }),
-                }).catch(() => {});
-                setBusy(null);
-                router.refresh();
-              }}
+              onAction={(action) => control(s.id, action)}
+              onEdit={() => setEditing(s)}
             />
           ))}
         </div>
       )}
 
       {open && (
-        <CreateSlotModal
+        <SlotFormModal
           onClose={() => setOpen(false)}
-          onCreated={() => {
+          onSaved={() => {
             setOpen(false);
+            refresh();
+            router.refresh();
+          }}
+        />
+      )}
+      {editing && (
+        <SlotFormModal
+          slot={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            refresh();
             router.refresh();
           }}
         />
@@ -111,29 +181,123 @@ export default function SlotsManager({ slots }: { slots: SlotView[] }) {
   );
 }
 
+type Phase = {
+  label: string;
+  cls: string;
+  dot: string;
+  pulse: boolean;
+};
+
+function phaseOf(slot: SlotView): Phase {
+  const msg = (slot.lastMessage || "").toLowerCase();
+  if (slot.active && slot.paused)
+    return {
+      label: "Pauzada",
+      cls: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
+      dot: "bg-amber-500",
+      pulse: false,
+    };
+  if (slot.active) {
+    if (msg.includes("yopiq") || msg.includes("tekshir"))
+      return {
+        label: "Tekshirilmoqda",
+        cls: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300",
+        dot: "bg-sky-500",
+        pulse: true,
+      };
+    return {
+      label: "Kutilmoqda",
+      cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+      dot: "bg-emerald-500",
+      pulse: true,
+    };
+  }
+  if (slot.openedAt)
+    return {
+      label: "Ochildi",
+      cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+      dot: "bg-emerald-500",
+      pulse: false,
+    };
+  if (msg.includes("tugadi"))
+    return {
+      label: "Tugadi",
+      cls: "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
+      dot: "bg-rose-500",
+      pulse: false,
+    };
+  return {
+    label: "To'xtagan",
+    cls: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400",
+    dot: "bg-slate-400",
+    pulse: false,
+  };
+}
+
 function StatusPill({ slot }: { slot: SlotView }) {
-  const { active, paused } = slot;
-  const cfg = !active
-    ? { label: "To'xtagan", cls: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400" }
-    : paused
-      ? { label: "Pauzada", cls: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300" }
-      : { label: "Faol", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" };
+  const p = phaseOf(slot);
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${cfg.cls}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${active && !paused ? "bg-emerald-500 animate-pulse" : paused ? "bg-amber-500" : "bg-slate-400"}`} />
-      {cfg.label}
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${p.cls}`}
+    >
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${p.dot} ${p.pulse ? "animate-pulse" : ""}`}
+      />
+      {p.label}
     </span>
   );
 }
+
+const EVENT_META: Record<string, { label: string; cls: string }> = {
+  open: { label: "Ochildi", cls: "text-emerald-600" },
+  expired: { label: "Tugadi", cls: "text-rose-600" },
+  configure: { label: "Sozlandi", cls: "text-slate-500" },
+  go: { label: "Boshlandi", cls: "text-emerald-600" },
+  pause: { label: "Pauza", cls: "text-amber-600" },
+  stop: { label: "To'xtatildi", cls: "text-slate-500" },
+};
+
+function Countdown({ slot }: { slot: SlotView }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  if (!slot.active || slot.paused || !slot.slotAt) return null;
+  const diff = new Date(slot.slotAt).getTime() - now;
+  if (diff <= 0) return null;
+  const sec = Math.floor(diff / 1000);
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const text =
+    d > 0
+      ? `${d} kun ${pad2(h)}:${pad2(m)}:${pad2(s)}`
+      : `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+  return (
+    <div className="rounded-xl bg-brand-50 px-3 py-2 text-center dark:bg-brand-500/10">
+      <div className="font-mono text-base font-bold tabular-nums text-brand-600">
+        {text}
+      </div>
+      <div className="text-[10px] uppercase tracking-wide text-slate-400">
+        slotgacha
+      </div>
+    </div>
+  );
+}
+
 
 function SlotCard({
   slot,
   busy,
   onAction,
+  onEdit,
 }: {
   slot: SlotView;
   busy: boolean;
   onAction: (action: "go" | "pause" | "stop") => void;
+  onEdit: () => void;
 }) {
   return (
     <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
@@ -146,7 +310,16 @@ function SlotCard({
             {slot.slotAt ? fmtDateTime(slot.slotAt) : "Vaqt belgilanmagan"}
           </p>
         </div>
-        <StatusPill slot={slot} />
+        <div className="flex items-center gap-1.5">
+          <StatusPill slot={slot} />
+          <button
+            onClick={onEdit}
+            title="Sozlash"
+            className="text-slate-300 transition hover:text-brand-500"
+          >
+            <Setting4 size={16} />
+          </button>
+        </div>
       </div>
 
       {/* Yo'nalish — bayroqlar bilan */}
@@ -178,6 +351,46 @@ function SlotCard({
         <span className="ml-auto">{slot.windowMinutes} daq oyna</span>
       </div>
 
+      <Countdown slot={slot} />
+
+      {/* Oxirgi holat xabari */}
+      <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
+        {slot.lastMessage}
+      </p>
+
+      {/* Voqealar tarixi — ochildi/yopildi/tugadi */}
+      {slot.events.length > 0 && (
+        <div className="space-y-1">
+          {slot.events.map((e) => {
+            const meta = EVENT_META[e.type] ?? {
+              label: e.type,
+              cls: "text-slate-500",
+            };
+            return (
+              <div
+                key={e.id}
+                className="flex items-center gap-2 text-[11px] text-slate-400"
+              >
+                <TickCircle
+                  size={12}
+                  variant="Bold"
+                  className={meta.cls}
+                />
+                <span className={`font-semibold ${meta.cls}`}>
+                  {meta.label}
+                </span>
+                {e.usersQueued > 0 && (
+                  <span>· {e.usersQueued} user</span>
+                )}
+                <span className="ml-auto tabular-nums">
+                  {fmtDateTime(e.createdAt)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         {!slot.active || slot.paused ? (
           <button
@@ -208,19 +421,28 @@ function SlotCard({
   );
 }
 
-function CreateSlotModal({
+function SlotFormModal({
+  slot,
   onClose,
-  onCreated,
+  onSaved,
 }: {
+  slot?: SlotView;
   onClose: () => void;
-  onCreated: () => void;
+  onSaved: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [fromCountry, setFromCountry] = useState("UZB");
-  const [toCountry, setToCountry] = useState("LVA");
-  const [slotAt, setSlotAt] = useState("");
-  const [windowMinutes, setWindowMinutes] = useState(10);
-  const [registerLeadMinutes, setRegisterLeadMinutes] = useState(5);
+  const isEdit = !!slot;
+  const [name, setName] = useState(slot?.name ?? "");
+  const [fromCountry, setFromCountry] = useState(
+    slot?.direction.fromCountry ?? "UZB",
+  );
+  const [toCountry, setToCountry] = useState(slot?.direction.toCountry ?? "LVA");
+  const [slotAt, setSlotAt] = useState(
+    slot?.slotAt ? slot.slotAt.slice(0, 16) : "",
+  );
+  const [windowMinutes, setWindowMinutes] = useState(slot?.windowMinutes ?? 10);
+  const [registerLeadMinutes, setRegisterLeadMinutes] = useState(
+    slot?.registerLeadMinutes ?? 5,
+  );
   const [superUsername, setSuperUsername] = useState("");
   const [superPassword, setSuperPassword] = useState("");
   const [error, setError] = useState("");
@@ -229,28 +451,42 @@ function CreateSlotModal({
   async function submit() {
     setError("");
     if (!name.trim()) return setError("Slot nomini kiriting");
-    if (!superUsername.trim() || !superPassword.trim())
+    if (!isEdit && (!superUsername.trim() || !superPassword.trim()))
       return setError("Super login va parolni kiriting");
     setSaving(true);
-    const res = await fetch("/api/slots", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        fromCountry,
-        toCountry,
-        slotAt: slotAt || null,
-        windowMinutes,
-        registerLeadMinutes,
-        superUsername,
-        superPassword,
-      }),
-    }).catch(() => null);
+    const res = isEdit
+      ? await fetch(`/api/slots/${slot!.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "configure",
+            name,
+            fromCountry,
+            toCountry,
+            slotAt: slotAt || null,
+            windowMinutes,
+            registerLeadMinutes,
+          }),
+        }).catch(() => null)
+      : await fetch("/api/slots", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            fromCountry,
+            toCountry,
+            slotAt: slotAt || null,
+            windowMinutes,
+            registerLeadMinutes,
+            superUsername,
+            superPassword,
+          }),
+        }).catch(() => null);
     setSaving(false);
     if (!res) return setError("Tarmoq xatosi");
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return setError(data.error || "Xatolik yuz berdi");
-    onCreated();
+    onSaved();
   }
 
   return (
@@ -264,7 +500,7 @@ function CreateSlotModal({
           <div className="flex items-center gap-2">
             <CalendarIcon size={20} variant="Bold" className="text-brand-600" />
             <h2 className="text-base font-bold text-slate-800 dark:text-slate-100">
-              Yangi slot qo'shish
+              {isEdit ? "Slotni sozlash" : "Yangi slot qo'shish"}
             </h2>
           </div>
           <button
@@ -336,30 +572,32 @@ function CreateSlotModal({
             </Field>
           </div>
 
-          {/* Super login/parol — slot yaratish uchun alohida */}
-          <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-500/20 dark:bg-amber-500/5">
-            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
-              <Lock1 size={14} variant="Bold" />
-              Super login/parol (slot yaratish uchun)
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <input
-                value={superUsername}
-                onChange={(e) => setSuperUsername(e.target.value)}
-                placeholder="super login"
-                autoComplete="off"
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              />
-              <input
-                type="password"
-                value={superPassword}
-                onChange={(e) => setSuperPassword(e.target.value)}
-                placeholder="super parol"
-                autoComplete="new-password"
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              />
+          {/* Super login/parol — faqat yaratishda */}
+          {!isEdit && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-500/20 dark:bg-amber-500/5">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                <Lock1 size={14} variant="Bold" />
+                Super login/parol (slot yaratish uchun)
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  value={superUsername}
+                  onChange={(e) => setSuperUsername(e.target.value)}
+                  placeholder="super login"
+                  autoComplete="off"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <input
+                  type="password"
+                  value={superPassword}
+                  onChange={(e) => setSuperPassword(e.target.value)}
+                  placeholder="super parol"
+                  autoComplete="new-password"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {error && (
             <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600 dark:bg-rose-500/10 dark:text-rose-300">
@@ -381,7 +619,11 @@ function CreateSlotModal({
             className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-60"
           >
             <Add size={18} variant="Bold" />
-            {saving ? "Saqlanmoqda..." : "Slot qo'shish"}
+            {saving
+              ? "Saqlanmoqda..."
+              : isEdit
+                ? "Saqlash"
+                : "Slot qo'shish"}
           </button>
         </div>
       </div>

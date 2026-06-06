@@ -1120,6 +1120,8 @@ export type GroupStats = {
   orderRuns: number;
   slotOpenAt: Date | null;
   slotCloseAt: Date | null;
+  fromCountry: string | null;
+  toCountry: string | null;
 };
 
 export async function getGroupStats(
@@ -1127,7 +1129,11 @@ export async function getGroupStats(
 ): Promise<GroupStats | null> {
   const group = await prisma.group.findUnique({
     where: { id: groupId },
-    include: { applicants: true, runs: true },
+    include: {
+      applicants: true,
+      runs: true,
+      slot: { select: { fromCountry: true, toCountry: true } },
+    },
   });
   if (!group) return null;
 
@@ -1155,6 +1161,8 @@ export async function getGroupStats(
     orderRuns: group.runs.filter((r) => r.stage === "order").length,
     slotOpenAt: group.slotOpenAt,
     slotCloseAt: group.slotCloseAt,
+    fromCountry: group.slot?.fromCountry ?? null,
+    toCountry: group.slot?.toCountry ?? null,
   };
 }
 

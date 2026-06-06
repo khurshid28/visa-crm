@@ -53,6 +53,13 @@ import {
 } from "./slot-monitor";
 import { readMrzFromImage } from "./passport-ocr";
 import { GROUP_STATUS, APPLICANT_STATUS } from "./status";
+import { countryFlag, countryName } from "./options";
+
+// Slot yo'nalishini bayroqlar bilan chiroyli matn qiladi: "🇺🇿 O'zbekiston → 🇱🇻 Latviya"
+function dirText(from?: string | null, to?: string | null): string {
+  if (!from || !to) return "";
+  return `${countryFlag(from)} ${countryName(from)} → ${countryFlag(to)} ${countryName(to)}`;
+}
 
 const COMMANDS = [
   { command: "start", description: "Botni ishga tushirish / menyu" },
@@ -255,16 +262,22 @@ async function handleCommand(text: string): Promise<string> {
     case "groups": {
       const groups = await prisma.group.findMany({
         orderBy: { createdAt: "desc" },
-        include: { _count: { select: { applicants: true } } },
+        include: {
+          _count: { select: { applicants: true } },
+          slot: { select: { fromCountry: true, toCountry: true } },
+        },
         take: 30,
       });
       if (!groups.length)
         return title("📁", "Guruhlar") + "<i>Hali guruh yo'q.</i>";
-      const lines = groups.map(
-        (g) =>
+      const lines = groups.map((g) => {
+        const dir = dirText(g.slot?.fromCountry, g.slot?.toCountry);
+        return (
           `${statusDot(g.status)} <b>${esc(g.name)}</b> <code>#${g.id}</code>\n` +
-          `   👥 ${g._count.applicants} ta · ${statusLabel(GROUP_STATUS, g.status)}`,
-      );
+          `   👥 ${g._count.applicants} ta · ${statusLabel(GROUP_STATUS, g.status)}` +
+          (dir ? `\n   🧭 ${dir}` : "")
+        );
+      });
       return (
         title("📁", "Guruhlar", `Jami: ${groups.length} ta`) + lines.join("\n")
       );
@@ -275,12 +288,14 @@ async function handleCommand(text: string): Promise<string> {
       if (!id) return "Foydalanish: /group <id>";
       const s = await getGroupStats(id);
       if (!s) return "❌ Guruh topilmadi.";
+      const gdir = dirText(s.fromCountry, s.toCountry);
       return (
         title(
           "📁",
           esc(s.name),
           `#${s.id} · ${statusDot(s.status)} ${statusLabel(GROUP_STATUS, s.status)}`,
         ) +
+        (gdir ? `🧭 ${gdir}\n${DIV}\n` : "") +
         row("Jami arizachi", s.total, "👥") +
         row("To'liq ma'lumot", s.complete, "✔️") +
         row("Ro'yxatdan o'tgan", s.registered, "📝") +

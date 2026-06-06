@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { countryName, countryIso2 } from "@/lib/options";
 import GroupDetail from "@/components/GroupDetail";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,10 @@ export default async function GroupPage({
 
   const group = await prisma.group.findUnique({
     where: { id },
-    include: { applicants: { orderBy: { id: "asc" } } },
+    include: {
+      applicants: { orderBy: { id: "asc" } },
+      slot: { select: { name: true, fromCountry: true, toCountry: true } },
+    },
   });
   if (!group) notFound();
 
@@ -46,6 +50,19 @@ export default async function GroupPage({
     a.errorStage = err?.stage ?? null;
     a.errorNote = err?.note ?? a.resultNote ?? null;
   }
+
+  // Yo'nalish (slot) ma'lumotini bayroqlar bilan ko'rsatish uchun tayyorlaymiz.
+  groupData.slot = group.slot
+    ? {
+        name: group.slot.name,
+        fromCountry: group.slot.fromCountry,
+        toCountry: group.slot.toCountry,
+        fromName: countryName(group.slot.fromCountry),
+        toName: countryName(group.slot.toCountry),
+        fromIso2: countryIso2(group.slot.fromCountry).toLowerCase(),
+        toIso2: countryIso2(group.slot.toCountry).toLowerCase(),
+      }
+    : null;
 
   return (
     <div className="space-y-6">

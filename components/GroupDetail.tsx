@@ -69,6 +69,15 @@ type Group = {
   status: string;
   fileName: string | null;
   paused: boolean;
+  slot?: {
+    name: string;
+    fromCountry: string;
+    toCountry: string;
+    fromName: string;
+    toName: string;
+    fromIso2: string;
+    toIso2: string;
+  } | null;
   applicants: Applicant[];
 };
 
@@ -349,6 +358,30 @@ export default function GroupDetail({ group }: { group: Group }) {
               {total} arizachi
               {group.fileName ? ` - ${group.fileName}` : ""}
             </p>
+            {group.slot && (
+              <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1 text-xs font-medium backdrop-blur">
+                {group.slot.fromIso2 && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`https://flagcdn.com/${group.slot.fromIso2}.svg`}
+                    alt=""
+                    className="h-[13px] w-[18px] rounded-sm object-cover ring-1 ring-white/20"
+                  />
+                )}
+                {group.slot.fromName}
+                <span>→</span>
+                {group.slot.toIso2 && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`https://flagcdn.com/${group.slot.toIso2}.svg`}
+                    alt=""
+                    className="h-[13px] w-[18px] rounded-sm object-cover ring-1 ring-white/20"
+                  />
+                )}
+                {group.slot.toName}
+                <span className="text-white/50">· {group.slot.name}</span>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">

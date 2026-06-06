@@ -9,7 +9,6 @@ import { fmtDateTime } from "@/lib/date";
 import UploadGroup from "@/components/UploadGroup";
 import ListControls from "@/components/ListControls";
 import Pagination from "@/components/Pagination";
-import SlotMonitorBar from "@/components/SlotMonitorBar";
 import GroupPauseToggle from "@/components/GroupPauseToggle";
 
 export const dynamic = "force-dynamic";
@@ -86,8 +85,6 @@ export default async function GroupsPage({
         </div>
         <UploadGroup slots={slotOptions} />
       </div>
-
-      <SlotMonitorBar />
 
       <ListControls
         searchPlaceholder="Guruh nomi yoki fayl bo'yicha qidirish..."

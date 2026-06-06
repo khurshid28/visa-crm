@@ -334,6 +334,79 @@ export async function enqueueStaleReRegisters(
   return { total: applicants.length, queued, skipped: details.length - queued };
 }
 
+// Bitta slotga bog'langan guruhlardagi REGISTERED arizachilar uchun order jobi.
+export async function enqueueSlotRegisteredGroups(
+  slotId: number,
+  source: "web" | "bot" | "system" = "system",
+): Promise<EnqueueManyResult> {
+  const applicants = await prisma.applicant.findMany({
+    where: {
+      status: ApplicantStatus.REGISTERED,
+      group: { paused: false, slotId },
+    },
+    select: { id: true, groupId: true },
+  });
+
+  const details: EnqueueResult[] = [];
+  for (const a of applicants) {
+    details.push(
+      await enqueueApplicantJob({
+        applicantId: a.id,
+        groupId: a.groupId,
+        stage: "order",
+        source,
+        reason: `slot-${slotId}-monitor`,
+      }),
+    );
+  }
+
+  const groups = new Set(applicants.map((a) => a.groupId));
+  const queuedJobs = details.filter((d) => d.queued).length;
+  return {
+    totalGroups: groups.size,
+    queuedJobs,
+    skippedJobs: details.length - queuedJobs,
+    details,
+  };
+}
+
+// Slotga bog'langan guruhlardagi eskirgan registerlarni qayta navbatga qo'shadi.
+export async function enqueueSlotStaleReRegisters(
+  slotId: number,
+  source: "web" | "bot" | "system" = "system",
+): Promise<{ total: number; queued: number; skipped: number }> {
+  const ttlH = Number(process.env.REGISTER_TTL_HOURS || 24);
+  const cutoff = new Date(Date.now() - (ttlH > 0 ? ttlH : 24) * 3600 * 1000);
+
+  const applicants = await prisma.applicant.findMany({
+    where: {
+      status: ApplicantStatus.REGISTERED,
+      group: { slotId },
+      OR: [
+        { registerFinishedAt: null },
+        { registerFinishedAt: { lt: cutoff } },
+      ],
+    },
+    select: { id: true, groupId: true },
+  });
+
+  const details: EnqueueResult[] = [];
+  for (const a of applicants) {
+    details.push(
+      await enqueueApplicantJob({
+        applicantId: a.id,
+        groupId: a.groupId,
+        stage: "register",
+        source,
+        reason: `slot-${slotId}-lead-reregister`,
+      }),
+    );
+  }
+
+  const queued = details.filter((d) => d.queued).length;
+  return { total: applicants.length, queued, skipped: details.length - queued };
+}
+
 export async function consumeOrderQueue(
   onMessage: (job: OrderJob) => Promise<void>,
 ): Promise<void> {

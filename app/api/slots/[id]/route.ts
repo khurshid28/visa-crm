@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { configureSlot, controlSlot } from "@/lib/slots";
+import { configureSlot, controlSlot, runSlotTick } from "@/lib/slots";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,6 +18,11 @@ export async function PATCH(
   if (action === "pause" || action === "go" || action === "stop") {
     const slot = await controlSlot(id, action);
     return NextResponse.json({ ok: true, slot });
+  }
+
+  if (action === "tick") {
+    const result = await runSlotTick(id);
+    return NextResponse.json({ ok: true, ...result });
   }
 
   if (action === "configure") {
