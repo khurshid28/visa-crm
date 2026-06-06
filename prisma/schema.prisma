@@ -356,3 +356,74 @@ model SlotEvent {
   @@index([createdAt])
   @@index([slotId])
 }
+
+// Ichki tiketlar (ish so'rovlari / muammolar) — 2-3 admin yuritadi.
+// Har bir tiket: matn, status, manba (system/web/bot), hashteglar,
+// bog'langan obyektlar (slot/guruh/user/hujjat), biriktirilgan fayllar
+// (rasm/hujjat, 10 tagacha) va xabarlar zanjiri (todo uslubida yoziladi).
+// Arxivlangach asosiy ro'yxatdan yo'qoladi, "Arxiv" bo'limida qoladi.
+model Ticket {
+  id          Int                @id @default(autoincrement())
+  title       String
+  body        String?            @db.Text
+  source      String             @default("system") // system | web | bot
+  status      String             @default("OPEN") // OPEN | PROGRESS | WAITING | DONE
+  tags        String?            @db.Text // hashteglar: "#slot #shoshilinch"
+  archived    Boolean            @default(false)
+  author      String? // yaratgan admin (username)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  attachments TicketAttachment[]
+  entries     TicketEntry[]
+  refs        TicketRef[]
+
+  @@index([archived])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Tiket xabari (zanjir) — bitta tiketga 2-3 ta matn ketma-ket yoziladi.
+// Har bir xabarning o'z fayllari (rasm/hujjat) bo'lishi mumkin.
+model TicketEntry {
+  id          Int                @id @default(autoincrement())
+  ticketId    Int
+  ticket      Ticket             @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  body        String?            @db.Text
+  author      String? // yozgan admin (username)
+  createdAt   DateTime           @default(now())
+  attachments TicketAttachment[]
+
+  @@index([ticketId])
+}
+
+// Tiket fayli — rasm yoki hujjat. Bazada (LongBlob) saqlanadi, /api orqali
+// ko'rsatiladi/yuklab olinadi. Tiketga yoki uning bir xabariga bog'lanadi.
+model TicketAttachment {
+  id        Int          @id @default(autoincrement())
+  ticketId  Int
+  ticket    Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  entryId   Int? // null = tiketning o'zida; bo'lsa — shu xabarga tegishli
+  entry     TicketEntry? @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  data      Bytes        @db.LongBlob
+  mime      String       @default("image/png")
+  name      String?
+  size      Int          @default(0) // bayt
+  kind      String       @default("image") // image | file
+  createdAt DateTime     @default(now())
+
+  @@index([ticketId])
+  @@index([entryId])
+}
+
+// Tiketga bog'langan obyekt (slot/guruh/user/hujjat) — @# mention uslubida.
+model TicketRef {
+  id        Int      @id @default(autoincrement())
+  ticketId  Int
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  kind      String // slot | group | user | document
+  refId     Int
+  label     String
+  createdAt DateTime @default(now())
+
+  @@index([ticketId])
+}
