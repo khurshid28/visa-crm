@@ -452,6 +452,12 @@ export async function runBooking(
       if (ok) filled.push(field);
     }
 
+    // Cloudflare Turnstile bo'lsa — token to'lguncha (captcha o'tguncha) kutamiz.
+    const captcha = await waitForTurnstile(page);
+    if (captcha.present && !captcha.solved) {
+      pageErrors.push("turnstile: token kutib olinmadi (captcha o'tmadi)");
+    }
+
     // Submit tugmasini bosamiz (agar topilsa).
     const submitted = await clickSubmit(page);
 
@@ -477,6 +483,11 @@ export async function runBooking(
       `${stageLabel(stage)}: ` +
       `${filled.length} maydon to'ldirildi` +
       (submitted ? ", forma yuborildi" : ", submit tugmasi topilmadi") +
+      (captcha.present
+        ? captcha.solved
+          ? ", captcha o'tdi"
+          : ", captcha o'tmadi"
+        : "") +
       (ref ? `, ref: ${ref}` : "");
 
     return {
@@ -787,6 +798,63 @@ async function fillSmartField(
     // jim — natijaga ta'sir qilmaydi.
   }
   return false;
+}
+
+/**
+ * Cloudflare Turnstile captcha'ni aniqlaydi va token to'lguncha kutadi.
+ *  - present: sahifada Turnstile widget bor-yo'qligi.
+ *  - solved: token (cf-turnstile-response) to'ldirildimi (captcha o'tdimi).
+ *
+ *  Turnstile odatda "managed/non-interactive" rejimda — toza brauzer + yaxshi
+ *  IP bo'lsa o'zi avtomatik o'tadi. Biz faqat token to'lguncha kutamiz, shunda
+ *  forma yuborilganda token amal qiladi. Hech qachon exception tashlamaydi.
+ */
+async function waitForTurnstile(
+  page: import("playwright").Page,
+): Promise<{ present: boolean; solved: boolean }> {
+  const timeoutMs = Number(process.env.BOOKING_CAPTCHA_TIMEOUT_MS || "30000");
+  try {
+    // Widget bormi? (iframe yoki hidden input yoki .cf-turnstile konteyner)
+    const present = await page
+      .evaluate(() => {
+        const hasInput = !!document.querySelector(
+          'input[name="cf-turnstile-response"], [id^="cf-chl-widget"]',
+        );
+        const hasWidget = !!document.querySelector(
+          '.cf-turnstile, iframe[src*="challenges.cloudflare.com"]',
+        );
+        return hasInput || hasWidget;
+      })
+      .catch(() => false);
+
+    if (!present) return { present: false, solved: false };
+
+    // Token to'lguncha kutamiz (cf-turnstile-response value uzunligi > 30).
+    await page
+      .waitForFunction(
+        () => {
+          const el = document.querySelector(
+            'input[name="cf-turnstile-response"]',
+          ) as HTMLInputElement | null;
+          return !!el && !!el.value && el.value.length > 30;
+        },
+        { timeout: timeoutMs },
+      )
+      .catch(() => {});
+
+    const solved = await page
+      .evaluate(() => {
+        const el = document.querySelector(
+          'input[name="cf-turnstile-response"]',
+        ) as HTMLInputElement | null;
+        return !!el && !!el.value && el.value.length > 30;
+      })
+      .catch(() => false);
+
+    return { present: true, solved };
+  } catch {
+    return { present: false, solved: false };
+  }
 }
 
 /** Forma yuborish tugmasini topib bosadi. */
