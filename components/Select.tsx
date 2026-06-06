@@ -3,7 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown2, TickCircle } from "iconsax-react";
 
-export type SelectOption = { value: string; label: string; iso2?: string };
+export type SelectOption = {
+  value: string;
+  label: string;
+  iso2?: string;
+  // Yo'nalish (slot) uchun ikki bayroq: from → to.
+  fromIso2?: string;
+  toIso2?: string;
+};
 
 // Bayroq rasmi (flagcdn). Windowsda emoji bayroqlar ko'rinmaydi.
 function Flag({ iso2 }: { iso2?: string }) {
@@ -18,6 +25,26 @@ function Flag({ iso2 }: { iso2?: string }) {
       className="h-[15px] w-[20px] shrink-0 rounded-sm object-cover ring-1 ring-black/5"
     />
   );
+}
+
+// Yo'nalish belgisi: 🇺🇿 → 🇱🇻. Ikkala bayroq ham bo'lsa shu ko'rinadi.
+function FlagPair({ from, to }: { from?: string; to?: string }) {
+  if (!from && !to) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <Flag iso2={from} />
+      <span className="text-xs text-brand-400">→</span>
+      <Flag iso2={to} />
+    </span>
+  );
+}
+
+// Tanlovga mos bayroq(lar)ni chizadi: yo'nalish bo'lsa juft, aks holda bitta.
+function OptionFlag({ option }: { option: SelectOption }) {
+  if (option.fromIso2 || option.toIso2) {
+    return <FlagPair from={option.fromIso2} to={option.toIso2} />;
+  }
+  return <Flag iso2={option.iso2} />;
 }
 
 // Chiroyli, to'liq stillangan dropdown (native <select> o'rniga).
@@ -108,7 +135,7 @@ export default function Select({
             selected ? "font-medium text-slate-700" : "text-slate-400"
           }`}
         >
-          {selected?.iso2 && <Flag iso2={selected.iso2} />}
+          {selected && <OptionFlag option={selected} />}
           <span className="truncate">
             {selected ? selected.label : placeholder}
           </span>
@@ -143,7 +170,7 @@ export default function Select({
                 }`}
               >
                 <span className="flex items-center gap-2 truncate">
-                  <Flag iso2={o.iso2} />
+                  <OptionFlag option={o} />
                   <span className="truncate">{o.label}</span>
                 </span>
                 {active && (

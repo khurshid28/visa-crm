@@ -202,7 +202,8 @@ export default function UploadGroup({ slots = [] }: { slots?: SlotOption[] }) {
             options={slots.map((s) => ({
               value: String(s.id),
               label: `${s.name} · ${s.fromName} → ${s.toName}`,
-              iso2: s.toIso2,
+              fromIso2: s.fromIso2,
+              toIso2: s.toIso2,
             }))}
           />
         )}
