@@ -37,6 +37,12 @@ export type ProxyTarget = {
   profileKey?: string | null;
   /** true bo'lsa — har chaqiruvda yangi (tasodifiy) IP (checkSlot uchun). */
   rotating?: boolean;
+  /**
+   * IP-urinish raqami. 0 (yoki yo'q) = oddiy sticky IP. >0 bo'lsa — session id'ga
+   * qo'shiladi, ya'ni o'sha userga BOSHQA (yangi) IP beriladi. IP bloklansa (403)
+   * toza IP bilan qayta urinish uchun.
+   */
+  ipAttempt?: number;
 };
 
 /** profileKey'ni proxy session id uchun xavfsiz holatga keltiradi. */
@@ -107,6 +113,10 @@ export function proxyFor(target: ProxyTarget): ProxyConfig | undefined {
     pickKey = session;
   } else {
     session = sanitizeSession(target.profileKey) || "shared";
+    // IP bloklangan bo'lsa (403) — boshqa IP olish uchun session'ni o'zgartiramiz.
+    if (target.ipAttempt && target.ipAttempt > 0) {
+      session = `${session}a${target.ipAttempt}`;
+    }
     pickKey = session;
   }
 

@@ -19,11 +19,14 @@ import {
   proxyMetaFor,
   proxyIpEchoUrl,
   shouldLogExitIp,
+  isProxyEnabled,
   type ProxyTarget,
+  type ProxyConfig,
 } from "./proxy";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as net from "net";
 import { spawn, type ChildProcess } from "child_process";
 export type AutomationApplicant = {
   surname: string;
@@ -376,37 +379,167 @@ async function waitForCdp(port: number, timeoutMs = 20000): Promise<boolean> {
 }
 
 /**
+ * Debug: sahifa skrinshot + HTML + matn'ni uploads/debug ga saqlaydi.
+ * Email/forma topilmaganda nima ko'rinayotganini bilish uchun.
+ */
+async function dumpDebug(
+  page: import("playwright").Page,
+  tag: string,
+): Promise<void> {
+  try {
+    const dir = path.join(process.cwd(), "uploads", "debug");
+    fs.mkdirSync(dir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const baseP = path.join(dir, `${tag}-${ts}`);
+    await page
+      .screenshot({ path: `${baseP}.png`, fullPage: true })
+      .catch(() => {});
+    const html = await page.content().catch(() => "");
+    fs.writeFileSync(`${baseP}.html`, html, "utf8");
+    const title = await page.title().catch(() => "");
+    const bodyText = await page
+      .locator("body")
+      .innerText()
+      .catch(() => "");
+    fs.writeFileSync(
+      `${baseP}.txt`,
+      `URL: ${page.url()}\nTITLE: ${title}\n\n${bodyText.slice(0, 2000)}`,
+      "utf8",
+    );
+    // eslint-disable-next-line no-console
+    console.log(`[debug] saqlandi: ${baseP}.png / .html / .txt`);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** OS bergan bo'sh TCP portni topadi (parallel userlar to'qnashmasligi uchun). */
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+/** ProxyConfig'dan to'liq URL (login/parol bilan) yasaydi: scheme://user:pass@host:port */
+function fullProxyUrl(p: ProxyConfig): string {
+  const m = p.server.match(/^(\w+):\/\/(.+)$/);
+  const scheme = m ? m[1] : "http";
+  const hostport = m ? m[2] : p.server;
+  const u = encodeURIComponent(p.username);
+  const pw = encodeURIComponent(p.password);
+  return `${scheme}://${u}:${pw}@${hostport}`;
+}
+
+/**
  * HAQIQIY Chrome'ni o'zimiz (chrome.exe) debug porti bilan ishga tushirib,
  * connectOverCDP orqali ulanamiz. Playwright launch() ishlatmaymiz — shuning
  * uchun "--enable-automation" kabi belgilar yo'q va Turnstile uni oddiy Chrome
- * deb ko'radi. Profil COPY qilinadi (asl Chrome ochiq bo'lsa ham ishlaydi).
- * Faqat .env BOOKING_CHROME_USER_DATA_DIR berilganda chaqiriladi.
- * connectOverCDP rejimida proxy/fingerprint o'rnatib bo'lmaydi (haqiqiy Chrome).
+ * deb ko'radi.
+ *
+ *  PARALLEL: har user uchun BO'SH port + ALOHIDA profil papka olinadi, shuning
+ *  uchun 30-40 user bir vaqtda ishlay oladi (bir-biriga xalal bermaydi).
+ *
+ *  PROXY: chrome.exe login/parolli proxy'ni qabul qilmaydi. Shu sababli
+ *  IPRoyal proxy'sini `proxy-chain` orqali LOKAL parolsiz portga o'rab,
+ *  chrome'ga `--proxy-server=http://127.0.0.1:PORT` beramiz. Har user o'z
+ *  sticky IP'sini oladi (proxyFor(profileKey)).
+ *
+ *  PROFIL: har user (profileKey) o'z persistent papkasida saqlanadi
+ *  (BOOKING_CDP_PROFILE_DIR yoki BOOKING_PROFILE_DIR ostida) — register->login
+ *  ->order davomida sessiya/cookie saqlanadi. Agar BOOKING_CHROME_USER_DATA_DIR
+ *  + COPY berilsa, real Chrome profili (Profile 3) nusxasi ishlatiladi.
  */
-async function connectRealChrome(): Promise<{
+async function connectRealChrome(opts?: {
+  proxy?: ProxyConfig;
+  profileKey?: string | null;
+  /** Har urinishda toza profil (eski cookie/cache buzilgan bo'lsa). */
+  attempt?: number;
+}): Promise<{
   context: import("playwright").BrowserContext;
   close: () => Promise<void>;
 } | null> {
   const exe = findChromeExe();
   if (!exe) return null;
 
-  const srcUserData = (process.env.BOOKING_CHROME_USER_DATA_DIR || "").trim();
-  const profile = (process.env.BOOKING_CHROME_PROFILE || "Default").trim();
-  if (!srcUserData) return null;
+  // --- Profil papkasi (persistent per-user yoki real Chrome nusxasi) ---
+  const realUserData = (process.env.BOOKING_CHROME_USER_DATA_DIR || "").trim();
+  const realProfile = (process.env.BOOKING_CHROME_PROFILE || "Default").trim();
+  const copyMode =
+    (process.env.BOOKING_CHROME_COPY_PROFILE || "").trim().toLowerCase() ===
+    "true";
+  // Har ishga tushganda profilni TOZALAB ishlatish (eski/buzilgan sessiya
+  // muammosini oldini oladi). .env: BOOKING_CDP_FRESH_PROFILE=true.
+  const freshProfile =
+    (process.env.BOOKING_CDP_FRESH_PROFILE || "").trim().toLowerCase() ===
+    "true";
 
-  // Asl Chrome ochiq bo'lsa profil qulflanadi — vaqtinchalik nusxa ishlatamiz.
-  const userDataDir =
-    prepareCopiedUserDataDir(srcUserData, profile) || srcUserData;
+  const keySafe = sanitizeProfileKey(opts?.profileKey || "default");
+  let userDataDir: string;
+  let profileArg = "Default";
+  let isTempCopy = false;
 
-  const port = Number(process.env.BOOKING_CDP_PORT || "9222");
+  if (realUserData && copyMode) {
+    // Real Chrome profili (Profile 3) nusxasi — vaqtinchalik, yopilganda o'chadi.
+    const copied = prepareCopiedUserDataDir(realUserData, realProfile);
+    if (copied) {
+      userDataDir = copied;
+      profileArg = realProfile;
+      isTempCopy = true;
+    } else {
+      userDataDir = realUserData;
+      profileArg = realProfile;
+    }
+  } else {
+    // Har user o'z persistent papkasida (yangi profil — Turnstile'ni
+    // chrome.exe binarining o'zi o'tadi, Profile 3 cookie'lari shart emas).
+    const base = (
+      process.env.BOOKING_CDP_PROFILE_DIR ||
+      process.env.BOOKING_PROFILE_DIR ||
+      path.join(os.tmpdir(), "visa-cdp-profiles")
+    ).trim();
+    userDataDir = path.join(base, keySafe);
+    // Fresh rejimda (yoki qayta urinishda) eski profilni o'chirib yangidan
+    // boshlaymiz — buzilgan cookie/cache sahifa skriptlarini buzmasin.
+    if (freshProfile || (opts?.attempt ?? 0) > 0) {
+      try {
+        fs.rmSync(userDataDir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
+    fs.mkdirSync(userDataDir, { recursive: true });
+    profileArg = "Default";
+  }
+
+  // --- Proxy (proxy-chain orqali lokal parolsiz portga o'rab) ---
+  let localProxyUrl: string | null = null;
+  if (opts?.proxy) {
+    try {
+      const proxyChain = await import("proxy-chain");
+      localProxyUrl = await proxyChain.anonymizeProxy(fullProxyUrl(opts.proxy));
+    } catch {
+      localProxyUrl = null; // proxy o'ralmadi — proxy'siz davom etamiz.
+    }
+  }
+
+  // --- chrome.exe ni bo'sh portda ishga tushirish ---
+  const port = await findFreePort();
   const args = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
-    `--profile-directory=${profile}`,
+    `--profile-directory=${profileArg}`,
     "--no-first-run",
     "--no-default-browser-check",
     "--restore-last-session=false",
     "--disable-session-crashed-bubble",
+    ...(localProxyUrl ? [`--proxy-server=${localProxyUrl}`] : []),
     "about:blank",
   ];
 
@@ -415,6 +548,17 @@ async function connectRealChrome(): Promise<{
     stdio: "ignore",
   });
 
+  const cleanupProxy = async () => {
+    if (localProxyUrl) {
+      try {
+        const proxyChain = await import("proxy-chain");
+        await proxyChain.closeAnonymizedProxy(localProxyUrl, true);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
   const ready = await waitForCdp(port, 25000);
   if (!ready) {
     try {
@@ -422,6 +566,7 @@ async function connectRealChrome(): Promise<{
     } catch {
       /* ignore */
     }
+    await cleanupProxy();
     return null;
   }
 
@@ -439,7 +584,9 @@ async function connectRealChrome(): Promise<{
       } catch {
         /* ignore */
       }
-      if (userDataDir !== srcUserData) {
+      await cleanupProxy();
+      // Faqat vaqtinchalik nusxani o'chiramiz; persistent profilni saqlaymiz.
+      if (isTempCopy) {
         fs.rm(userDataDir, { recursive: true, force: true }, () => {});
       }
     },
@@ -462,7 +609,11 @@ async function openBrowserContext(
   const cdpMode =
     (process.env.BOOKING_CHROME_CDP || "").trim().toLowerCase() === "true";
   if (cdpMode) {
-    const real = await connectRealChrome();
+    const real = await connectRealChrome({
+      proxy,
+      profileKey: proxyTarget?.profileKey ?? null,
+      attempt: proxyTarget?.ipAttempt ?? 0,
+    });
     if (real) return real;
     // CDP muvaffaqiyatsiz bo'lsa — oddiy rejimga tushamiz (pastda).
   }
@@ -750,60 +901,114 @@ export async function loginToBooking(
   const profileKey = opts?.profileKey || email;
 
   try {
-    const session = await openBrowserContext(
-      profileDirFor("login", profileKey),
-      { profileKey },
+    let page: import("playwright").Page | null = null;
+    // IP bloklansa (403) — necha marta yangi IP bilan qayta urinish.
+    const maxIpRetries = Math.max(
+      1,
+      Number(process.env.BOOKING_PROXY_IP_RETRIES || "4"),
     );
-    closeSession = session.close;
-    step("Brauzer ochildi (stealth + proxy)");
+    const proxyOn = isProxyEnabled();
 
-    const page: import("playwright").Page = await session.context.newPage();
-    page.on("pageerror", (e) => {
-      pageErrors.push(`JS: ${e.message}`.slice(0, 200));
-    });
-    page.on("response", (res) => {
-      const s = res.status();
-      if (s >= 400) {
-        pageErrors.push(`HTTP ${s}: ${res.url().slice(0, 80)}`.slice(0, 200));
+    for (let attempt = 0; attempt < maxIpRetries; attempt++) {
+      // Avvalgi (bloklangan) sessiyani yopamiz.
+      if (closeSession) {
+        await closeSession().catch(() => {});
+        closeSession = null;
       }
-    });
 
-    // Warmup: avval asosiy sahifani ochamiz (region cookie/sessiya o'rnatadi va
-    // Cloudflare'ni yengilroq sahifada o'taymiz). .env: BOOKING_WARMUP_URL.
-    const warmupUrl = (process.env.BOOKING_WARMUP_URL || "").trim();
-    if (warmupUrl) {
-      step("Asosiy sahifa (warmup) ochilmoqda...");
-      await page
-        .goto(warmupUrl, { waitUntil: "domcontentloaded", timeout: 45000 })
+      const session = await openBrowserContext(
+        profileDirFor("login", profileKey),
+        { profileKey, ipAttempt: attempt },
+      );
+      closeSession = session.close;
+      step(
+        attempt === 0
+          ? "Brauzer ochildi (stealth + proxy)"
+          : `Yangi IP bilan qayta urinish #${attempt + 1}...`,
+      );
+
+      const p = await session.context.newPage();
+      page = p;
+      p.on("pageerror", (e: Error) => {
+        pageErrors.push(`JS: ${e.message}`.slice(0, 200));
+      });
+      p.on("response", (res: import("playwright").Response) => {
+        const s = res.status();
+        if (s >= 400) {
+          pageErrors.push(`HTTP ${s}: ${res.url().slice(0, 80)}`.slice(0, 200));
+        }
+      });
+
+      // Warmup: avval asosiy sahifani ochamiz (region cookie/sessiya o'rnatadi
+      // va Cloudflare'ni yengilroq sahifada o'taymiz). .env: BOOKING_WARMUP_URL.
+      const warmupUrl = (process.env.BOOKING_WARMUP_URL || "").trim();
+      if (warmupUrl) {
+        step("Asosiy sahifa (warmup) ochilmoqda...");
+        await p
+          .goto(warmupUrl, { waitUntil: "domcontentloaded", timeout: 45000 })
+          .catch(() => {});
+        await waitForCloudflareClear(p, step);
+        // Cookie banner chiqsa — qabul qilamiz.
+        if (await acceptCookies(p)) step("Cookie qabul qilindi");
+        await humanPause(800, 1600);
+        step("Warmup tugadi, login sahifasiga o'tilmoqda...");
+      }
+
+      step("Login sahifasi ochilmoqda...");
+      // Proxy tuneli uzilishi mumkin (ERR_TUNNEL_CONNECTION_FAILED) — buni
+      // ham "blok" deb hisoblab yangi IP bilan qayta urinamiz.
+      let gotoError = false;
+      let response: import("playwright").Response | null = null;
+      try {
+        response = await p.goto(url, {
+          waitUntil: "domcontentloaded",
+          timeout: 45000,
+        });
+      } catch (e) {
+        gotoError = true;
+        const m = e instanceof Error ? e.message : String(e);
+        pageErrors.push(`goto: ${m}`.slice(0, 200));
+      }
+      base.statusCode = response ? response.status() : null;
+      await p
+        .waitForLoadState("networkidle", { timeout: 10000 })
         .catch(() => {});
-      await waitForCloudflareClear(page, step);
-      // Cookie banner chiqsa — qabul qilamiz.
-      if (await acceptCookies(page)) step("Cookie qabul qilindi");
-      await humanPause(800, 1600);
-      step("Warmup tugadi, login sahifasiga o'tilmoqda...");
+      step(
+        gotoError
+          ? "Sahifa ochilmadi (proxy/ulanish xatosi)"
+          : `Sahifa ochildi (HTTP ${base.statusCode ?? "?"})`,
+      );
+
+      if (!gotoError && shouldLogExitIp()) {
+        base.exitIp = await readExitIp(p);
+        step(`Exit IP: ${base.exitIp || "—"}`);
+      }
+
+      // Cloudflare interstitial ("Just a moment" / "Checking your browser") bo'lsa
+      // — JS challenge avtomatik hal bo'lishini kutamiz (managed challenge).
+      const cleared = gotoError ? false : await waitForCloudflareClear(p, step);
+      const blocked = gotoError || base.statusCode === 403 || !cleared;
+
+      // Bloklanmagan bo'lsa — davom etamiz. Proxy o'chiq bo'lsa IP almashtirib
+      // bo'lmaydi (qayta urinish foydasiz). Oxirgi urinish ham shu yerda tugaydi.
+      if (!blocked || !proxyOn || attempt === maxIpRetries - 1) {
+        if (blocked) {
+          pageErrors.push(
+            "cloudflare/proxy: sahifa ochilmadi (403/blok/uzilish)",
+          );
+        }
+        break;
+      }
+
+      step(
+        gotoError
+          ? "Proxy uzildi — yangi IP olinmoqda..."
+          : `IP bloklandi (HTTP ${base.statusCode}) — yangi IP olinmoqda...`,
+      );
     }
 
-    step("Login sahifasi ochilmoqda...");
-    const response = await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 45000,
-    });
-    base.statusCode = response ? response.status() : null;
-    await page
-      .waitForLoadState("networkidle", { timeout: 10000 })
-      .catch(() => {});
-    step(`Sahifa ochildi (HTTP ${base.statusCode ?? "?"})`);
-
-    if (shouldLogExitIp()) {
-      base.exitIp = await readExitIp(page);
-      step(`Exit IP: ${base.exitIp || "—"}`);
-    }
-
-    // Cloudflare interstitial ("Just a moment" / "Checking your browser") bo'lsa
-    // — JS challenge avtomatik hal bo'lishini kutamiz (managed challenge).
-    const cleared = await waitForCloudflareClear(page, step);
-    if (!cleared) {
-      pageErrors.push("cloudflare: challenge hal bo'lmadi (403/blok)");
+    if (!page) {
+      return { ...base, note: "Brauzer ochilmadi" };
     }
 
     // Cookie banner login sahifasida ham chiqishi mumkin.
@@ -823,6 +1028,8 @@ export async function loginToBooking(
       step("Email kiritildi");
     } else {
       step("Email maydoni topilmadi!");
+      // Debug: sahifa holatini saqlaymiz (nima ko'rinayotganini bilish uchun).
+      await dumpDebug(page, "login-noemail").catch(() => {});
     }
     await humanPause();
 
@@ -915,7 +1122,12 @@ export async function loginToBooking(
           ? "Hali login sahifasida (parol/captcha tekshiring)"
           : "Login holati noaniq";
 
-    await closeSession();
+    // Login bo'lmasa — sahifa holatini saqlaymiz (VFS xato xabarini ko'rish uchun).
+    if (!base.ok) {
+      await dumpDebug(page, "login-result").catch(() => {});
+    }
+
+    if (closeSession) await closeSession();
     closeSession = null;
 
     base.pageError = pageErrors.length
