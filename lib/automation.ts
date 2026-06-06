@@ -21,6 +21,10 @@ import {
   shouldLogExitIp,
   type ProxyTarget,
 } from "./proxy";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { spawn, type ChildProcess } from "child_process";
 export type AutomationApplicant = {
   surname: string;
   name: string;
@@ -217,8 +221,13 @@ let stealthApplied = false;
 async function getStealthChromium() {
   // playwright-extra chromium'ni puppeteer-extra-plugin-stealth bilan o'raydi —
   // navigator.webdriver, plugins, languages, WebGL kabi bot-belgilarini yashiradi.
+  // DIQQAT: stealth ba'zan Turnstile'ni buzadi (a[c] is not a function). Real
+  // Chrome profili bilan ishlasangiz stealth shart emas — .env: BOOKING_STEALTH=false.
   const mod: any = await import("playwright-extra");
   const chromium = mod.chromium ?? mod.default?.chromium ?? mod.default;
+  const stealthOff =
+    (process.env.BOOKING_STEALTH || "true").trim().toLowerCase() === "false";
+  if (stealthOff) return chromium;
   if (!stealthApplied) {
     try {
       const stealthMod: any = await import("puppeteer-extra-plugin-stealth");
@@ -257,6 +266,186 @@ function profileDirFor(stage: Stage, profileKey?: string | null): string {
   return `${base}-${stage}`;
 }
 
+// Chrome profilini ochiq turganda ham ishlatish uchun: kerakli fayllarni
+// vaqtinchalik papkaga nusxalaymiz (Chrome'ni yopish shart emas). Cache kabi
+// og'ir/keraksiz papkalar tashlab ketiladi. Qulflangan fayl xatosi e'tiborsiz.
+const COPY_SKIP_DIRS = new Set([
+  "Cache",
+  "Code Cache",
+  "GPUCache",
+  "GraphiteDawnCache",
+  "DawnGraphiteCache",
+  "DawnWebGPUCache",
+  "Service Worker",
+  "Application Cache",
+  "Cache Storage",
+  "GrShaderCache",
+  "ShaderCache",
+  "component_crx_cache",
+  "extensions_crx_cache",
+  "Crashpad",
+]);
+
+function copyDirSafe(src: string, dst: string): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(src, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  fs.mkdirSync(dst, { recursive: true });
+  for (const e of entries) {
+    if (e.isDirectory() && COPY_SKIP_DIRS.has(e.name)) continue;
+    const s = path.join(src, e.name);
+    const d = path.join(dst, e.name);
+    if (e.isDirectory()) {
+      copyDirSafe(s, d);
+    } else {
+      try {
+        fs.copyFileSync(s, d);
+      } catch {
+        // qulflangan fayl (masalan ochiq Chrome) — tashlab ketamiz.
+      }
+    }
+  }
+}
+
+/**
+ * Haqiqiy Chrome User Data'dan tanlangan profilni vaqtinchalik papkaga nusxalaydi
+ * (Local State + profil papkasi). Chrome ochiq bo'lsa ham ishlaydi. Natijada
+ * Playwright shu nusxa orqali xuddi o'sha hisob (cookies/login) bilan ochadi.
+ * Yo'l qaytaradi (vaqtinchalik User Data dir) yoki muvaffaqiyatsizlikda null.
+ */
+function prepareCopiedUserDataDir(
+  srcUserData: string,
+  profile: string,
+): string | null {
+  try {
+    if (!fs.existsSync(srcUserData)) return null;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "visa-chrome-"));
+    // Local State (cookie shifrlash kaliti shu yerda).
+    const ls = path.join(srcUserData, "Local State");
+    if (fs.existsSync(ls)) {
+      try {
+        fs.copyFileSync(ls, path.join(tmp, "Local State"));
+      } catch {
+        /* ignore */
+      }
+    }
+    // Profil papkasi (Cookies, Login Data, Local Storage, Network, ...).
+    const prof = profile || "Default";
+    copyDirSafe(path.join(srcUserData, prof), path.join(tmp, prof));
+    return tmp;
+  } catch {
+    return null;
+  }
+}
+
+/** chrome.exe yo'lini topadi (.env: BOOKING_CHROME_PATH yoki standart joylar). */
+function findChromeExe(): string | null {
+  const env = (process.env.BOOKING_CHROME_PATH || "").trim();
+  if (env && fs.existsSync(env)) return env;
+  const candidates = [
+    `${process.env["ProgramFiles"] || "C:/Program Files"}/Google/Chrome/Application/chrome.exe`,
+    `${process.env["ProgramFiles(x86)"] || "C:/Program Files (x86)"}/Google/Chrome/Application/chrome.exe`,
+    `${process.env["LOCALAPPDATA"] || ""}/Google/Chrome/Application/chrome.exe`,
+  ];
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+/** CDP endpoint (http://127.0.0.1:PORT) tayyor bo'lguncha kutadi. */
+async function waitForCdp(port: number, timeoutMs = 20000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (res.ok) return true;
+    } catch {
+      /* hali tayyor emas */
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+/**
+ * HAQIQIY Chrome'ni o'zimiz (chrome.exe) debug porti bilan ishga tushirib,
+ * connectOverCDP orqali ulanamiz. Playwright launch() ishlatmaymiz — shuning
+ * uchun "--enable-automation" kabi belgilar yo'q va Turnstile uni oddiy Chrome
+ * deb ko'radi. Profil COPY qilinadi (asl Chrome ochiq bo'lsa ham ishlaydi).
+ * Faqat .env BOOKING_CHROME_USER_DATA_DIR berilganda chaqiriladi.
+ * connectOverCDP rejimida proxy/fingerprint o'rnatib bo'lmaydi (haqiqiy Chrome).
+ */
+async function connectRealChrome(): Promise<{
+  context: import("playwright").BrowserContext;
+  close: () => Promise<void>;
+} | null> {
+  const exe = findChromeExe();
+  if (!exe) return null;
+
+  const srcUserData = (process.env.BOOKING_CHROME_USER_DATA_DIR || "").trim();
+  const profile = (process.env.BOOKING_CHROME_PROFILE || "Default").trim();
+  if (!srcUserData) return null;
+
+  // Asl Chrome ochiq bo'lsa profil qulflanadi — vaqtinchalik nusxa ishlatamiz.
+  const userDataDir =
+    prepareCopiedUserDataDir(srcUserData, profile) || srcUserData;
+
+  const port = Number(process.env.BOOKING_CDP_PORT || "9222");
+  const args = [
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${userDataDir}`,
+    `--profile-directory=${profile}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--restore-last-session=false",
+    "--disable-session-crashed-bubble",
+    "about:blank",
+  ];
+
+  const child: ChildProcess = spawn(exe, args, {
+    detached: false,
+    stdio: "ignore",
+  });
+
+  const ready = await waitForCdp(port, 25000);
+  if (!ready) {
+    try {
+      child.kill();
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  const { chromium } = await import("playwright");
+  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+  const context = browser.contexts()[0] || (await browser.newContext());
+
+  return {
+    context,
+    close: async () => {
+      // Brauzerni yopamiz (bu o'zimiz ochgan Chrome — userniki emas).
+      await browser.close().catch(() => {});
+      try {
+        child.kill();
+      } catch {
+        /* ignore */
+      }
+      if (userDataDir !== srcUserData) {
+        fs.rm(userDataDir, { recursive: true, force: true }, () => {});
+      }
+    },
+  };
+}
+
 async function openBrowserContext(
   profileDir: string,
   proxyTarget?: ProxyTarget,
@@ -266,6 +455,17 @@ async function openBrowserContext(
   // Fingerprint'ni proxy exit IP davlatiga moslaymiz (timezone + til).
   const proxyCountry = proxyTarget ? proxyMetaFor(proxyTarget)?.country : null;
   const fp = fingerprintOptions(proxyCountry);
+
+  // CDP rejimi: haqiqiy chrome.exe'ni o'zimiz ochib connectOverCDP bilan ulanamiz
+  // (Turnstile uchun eng tabiiy — Playwright launch belgilarisiz). .env:
+  // BOOKING_CHROME_CDP=true + BOOKING_CHROME_USER_DATA_DIR + BOOKING_CHROME_PROFILE.
+  const cdpMode =
+    (process.env.BOOKING_CHROME_CDP || "").trim().toLowerCase() === "true";
+  if (cdpMode) {
+    const real = await connectRealChrome();
+    if (real) return real;
+    // CDP muvaffaqiyatsiz bo'lsa — oddiy rejimga tushamiz (pastda).
+  }
 
   // Tizimdagi haqiqiy Chrome (kanal) ishlatish — .env: BOOKING_BROWSER_CHANNEL=chrome
   // (yoki "msedge"). Bo'sh bo'lsa Playwright'ning ichki chromium'i ishlatiladi.
@@ -281,9 +481,26 @@ async function openBrowserContext(
   const realProfile = (process.env.BOOKING_CHROME_PROFILE || "").trim();
 
   if (realUserDataDir) {
+    // Chrome ochiq bo'lsa profil qulflanadi. COPY rejimi: profilni vaqtinchalik
+    // papkaga nusxalab, o'shani ishlatamiz (Chrome'ni yopish shart emas).
+    const useCopy =
+      (process.env.BOOKING_CHROME_COPY_PROFILE || "").trim().toLowerCase() ===
+      "true";
+    let userDataDir = realUserDataDir;
+    let profileArg = realProfile;
+    if (useCopy) {
+      const copied = prepareCopiedUserDataDir(
+        realUserDataDir,
+        realProfile || "Default",
+      );
+      if (copied) {
+        userDataDir = copied;
+        profileArg = realProfile || "Default";
+      }
+    }
     const args = [...launchArgs()];
-    if (realProfile) args.push(`--profile-directory=${realProfile}`);
-    const context = await chromium.launchPersistentContext(realUserDataDir, {
+    if (profileArg) args.push(`--profile-directory=${profileArg}`);
+    const context = await chromium.launchPersistentContext(userDataDir, {
       headless: envHeadless(),
       channel: channel || "chrome",
       args,
@@ -296,7 +513,12 @@ async function openBrowserContext(
     await applyStealthInit(context, fp.extraHTTPHeaders["Accept-Language"]);
     return {
       context,
-      close: async () => context.close(),
+      close: async () => {
+        await context.close().catch(() => {});
+        if (useCopy && userDataDir !== realUserDataDir) {
+          fs.rm(userDataDir, { recursive: true, force: true }, () => {});
+        }
+      },
     };
   }
 
@@ -555,6 +777,8 @@ export async function loginToBooking(
         .goto(warmupUrl, { waitUntil: "domcontentloaded", timeout: 45000 })
         .catch(() => {});
       await waitForCloudflareClear(page, step);
+      // Cookie banner chiqsa — qabul qilamiz.
+      if (await acceptCookies(page)) step("Cookie qabul qilindi");
       await humanPause(800, 1600);
       step("Warmup tugadi, login sahifasiga o'tilmoqda...");
     }
@@ -581,6 +805,9 @@ export async function loginToBooking(
     if (!cleared) {
       pageErrors.push("cloudflare: challenge hal bo'lmadi (403/blok)");
     }
+
+    // Cookie banner login sahifasida ham chiqishi mumkin.
+    if (await acceptCookies(page)) step("Cookie qabul qilindi");
 
     // EMAIL — Angular Material: ko'rinadigan input #email (yashirin #username emas).
     const emailSel = '#email, input[formcontrolname="username"]';
@@ -615,9 +842,23 @@ export async function loginToBooking(
 
     // Cloudflare Turnstile — token to'lguncha kutamiz.
     step("Cloudflare Turnstile tekshirilmoqda...");
-    const captcha = await waitForTurnstile(page);
+    let captcha = await waitForTurnstile(page);
     base.captchaPresent = captcha.present;
     base.captchaSolved = captcha.solved;
+
+    // Token avtomatik to'lmagan bo'lsa — checkbox ustiga inson kabi bosamiz
+    // (tasodifiy nuqtalarda) va yana token to'lishini kutamiz.
+    if (captcha.present && !captcha.solved) {
+      step("Captcha o'zi o'tmadi — ustiga bosilmoqda...");
+      const clicked = await clickTurnstile(page);
+      if (clicked) {
+        step("Captcha ustiga bosildi, token kutilmoqda...");
+      }
+      captcha = await waitForTurnstile(page);
+      base.captchaPresent = captcha.present;
+      base.captchaSolved = captcha.solved;
+    }
+
     if (captcha.present) {
       step(captcha.solved ? "Captcha o'tdi ✓" : "Captcha o'tmadi ✗");
     } else {
@@ -1225,6 +1466,91 @@ async function fillSmartField(
     // jim — natijaga ta'sir qilmaydi.
   }
   return false;
+}
+
+/**
+ * Cookie banner (OneTrust va boshqalar) chiqsa — "Accept all" tugmasini bosadi.
+ * Hech qachon throw qilmaydi. Bosilsa true qaytaradi.
+ */
+async function acceptCookies(
+  page: import("playwright").Page,
+): Promise<boolean> {
+  const selectors = [
+    "#onetrust-accept-btn-handler",
+    "button#onetrust-accept-btn-handler",
+    'button:has-text("Accept All Cookies")',
+    'button:has-text("Accept all cookies")',
+    'button:has-text("Accept All")',
+    'button:has-text("Accept Cookies")',
+    'button:has-text("Accept")',
+    'button:has-text("I Accept")',
+    'button:has-text("Allow all")',
+    'button:has-text("Got it")',
+    '[aria-label="Accept cookies"]',
+  ];
+  for (const sel of selectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if ((await btn.count()) > 0 && (await btn.isVisible())) {
+        await btn.click({ timeout: 3000 });
+        await page.waitForTimeout(rand(300, 700)).catch(() => {});
+        return true;
+      }
+    } catch {
+      // keyingisini sinaymiz.
+    }
+  }
+  return false;
+}
+
+/**
+ * Turnstile checkbox'i interaktiv bo'lsa — uning ustiga (iframe markaziga)
+ * inson kabi tasodifiy nuqtalarda bir necha marta bosadi. Token avtomatik
+ * to'lmagan holatlar uchun. Hech qachon throw qilmaydi.
+ */
+async function clickTurnstile(
+  page: import("playwright").Page,
+): Promise<boolean> {
+  try {
+    const frameEl = await page
+      .waitForSelector(
+        'iframe[src*="challenges.cloudflare.com"], .cf-turnstile iframe, #widgetId iframe',
+        { state: "visible", timeout: 4000 },
+      )
+      .catch(() => null);
+    if (!frameEl) return false;
+
+    const box = await frameEl.boundingBox().catch(() => null);
+    if (!box) return false;
+
+    // Checkbox odatda iframe'ning chap qismida. Tasodifiy 2-3 nuqtaga bosamiz.
+    const tries = rand(2, 4);
+    for (let i = 0; i < tries; i++) {
+      const x = box.x + rand(18, Math.max(20, Math.floor(box.width * 0.28)));
+      const y = box.y + box.height / 2 + rand(-6, 6);
+      // Avval kursorni inson kabi olib boramiz.
+      await page.mouse.move(x - rand(20, 60), y - rand(10, 30)).catch(() => {});
+      await page.waitForTimeout(rand(120, 320)).catch(() => {});
+      await page.mouse.move(x, y).catch(() => {});
+      await page.waitForTimeout(rand(80, 200)).catch(() => {});
+      await page.mouse.click(x, y).catch(() => {});
+      await page.waitForTimeout(rand(500, 1100)).catch(() => {});
+
+      // Token to'ldimi? To'lgan bo'lsa to'xtaymiz.
+      const ok = await page
+        .evaluate(() => {
+          const el = document.querySelector(
+            'input[name="cf-turnstile-response"]',
+          ) as HTMLInputElement | null;
+          return !!el && !!el.value && el.value.length > 30;
+        })
+        .catch(() => false);
+      if (ok) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 /**
