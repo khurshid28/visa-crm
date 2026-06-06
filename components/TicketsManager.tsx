@@ -296,25 +296,35 @@ export default function TicketsManager({
       </div>
 
       {/* Tablar */}
-      <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800/60">
+      <div className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         {(
           [
-            { key: "active", label: "Asosiy" },
-            { key: "archive", label: "Arxiv" },
+            { key: "active", label: "Asosiy", icon: TicketIcon },
+            { key: "archive", label: "Arxiv", icon: Archive },
           ] as const
-        ).map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-semibold transition-all ${
-              tab === t.key
-                ? "bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300"
-                : "text-slate-500 hover:text-slate-700 dark:text-slate-400"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+        ).map((t) => {
+          const Icon = t.icon;
+          const isActive = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-all ${
+                isActive
+                  ? "bg-brand-600 text-white shadow-sm"
+                  : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+              }`}
+            >
+              <Icon size={16} variant={isActive ? "Bold" : "Linear"} />
+              {t.label}
+              {isActive && tickets.length > 0 && (
+                <span className="ml-0.5 rounded-full bg-white/25 px-1.5 text-xs font-bold tabular-nums">
+                  {tickets.length}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Qidiruv va sana filtrlari */}
