@@ -212,6 +212,10 @@ model AutomationLog {
   proxySession  String? // sticky session id (qaysi user IP'si)
   exitIp        String? // proxy orqali chiqqan tashqi IP
   statusCode    Int? // asosiy sahifa HTTP status kodi
+  navMs         Int? // sahifa ochilish davomiyligi (ochilgan - kelgan)
+  pageError     String?    @db.Text // chrome web ochganda chiqqan xatolar
+  requestedAt   DateTime? // "kelgan": navigatsiya boshlangan vaqt
+  openedAt      DateTime? // "ochilgan": sahifa ochilgan/javob kelgan vaqt
   startedAt     DateTime   @default(now())
   finishedAt    DateTime   @default(now())
   createdAt     DateTime   @default(now())

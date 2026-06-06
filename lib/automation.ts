@@ -47,6 +47,10 @@ export type AutomationResult = {
   proxySession: string | null; // sticky session id (qaysi user IP'si)
   exitIp: string | null; // proxy orqali chiqqan tashqi IP
   statusCode: number | null; // asosiy sahifa HTTP status kodi
+  requestedAt: string | null; // "kelgan": navigatsiya boshlangan vaqt (ISO)
+  openedAt: string | null; // "ochilgan": sahifa ochilgan/javob kelgan vaqt (ISO)
+  navMs: number | null; // sahifa ochilish davomiyligi (ochilgan - kelgan)
+  pageError: string | null; // chrome web ochganda chiqqan xatolar (JS/timeout/4xx-5xx)
 };
 
 export type ActivationResult = {
@@ -59,6 +63,10 @@ export type ActivationResult = {
   proxySession: string | null; // register bilan bir xil session id bo'lishi kerak
   exitIp: string | null; // proxy orqali chiqqan IP (register bilan bir xil)
   statusCode: number | null; // aktivatsiya sahifasi HTTP status kodi
+  requestedAt: string | null; // "kelgan": link ochish boshlangan vaqt
+  openedAt: string | null; // "ochilgan": sahifa ochilgan vaqt
+  navMs: number | null; // ochilish davomiyligi
+  pageError: string | null; // chrome xatolari
 };
 
 type Stage = "register" | "login" | "order";
@@ -327,6 +335,10 @@ export async function runBooking(
       proxySession: null,
       exitIp: null,
       statusCode: null,
+      requestedAt: null,
+      openedAt: null,
+      navMs: null,
+      pageError: null,
     };
   }
 
@@ -345,6 +357,12 @@ export async function runBooking(
   );
   let statusCode: number | null = null;
   let exitIp: string | null = null;
+  // Vaqtlar: "kelgan" (navigatsiya boshlandi) va "ochilgan" (javob keldi).
+  let requestedAt: string | null = null;
+  let openedAt: string | null = null;
+  let navMs: number | null = null;
+  // Chrome web ochganda chiqqan xatolar (JS exception / failed request / 4xx-5xx).
+  const pageErrors: string[] = [];
 
   // Brauzer qaysi sahifaga o'tsa — tartib bilan yozib boramiz (takrorsiz).
   const trackUrl = (u: string) => {
@@ -372,10 +390,37 @@ export async function runBooking(
       }
     });
 
+    // Chrome xatolarini yig'amiz: JS exception, yuklanmagan so'rov, 4xx/5xx.
+    page.on("pageerror", (e) => {
+      pageErrors.push(`JS: ${e.message}`.slice(0, 200));
+    });
+    page.on("requestfailed", (req) => {
+      const f = req.failure();
+      pageErrors.push(
+        `REQFAIL: ${req.url().slice(0, 80)} (${f?.errorText || "?"})`.slice(
+          0,
+          200,
+        ),
+      );
+    });
+    page.on("response", (res) => {
+      const s = res.status();
+      if (s >= 400) {
+        pageErrors.push(`HTTP ${s}: ${res.url().slice(0, 80)}`.slice(0, 200));
+      }
+    });
+
+    // "kelgan": navigatsiya boshlandi.
+    const t0 = Date.now();
+    requestedAt = new Date(t0).toISOString();
     const response = await page.goto(url, {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
+    // "ochilgan": sahifa javob berdi / DOM tayyor.
+    const t1 = Date.now();
+    openedAt = new Date(t1).toISOString();
+    navMs = t1 - t0;
     statusCode = response ? response.status() : null;
     trackUrl(page.url());
 
@@ -447,10 +492,15 @@ export async function runBooking(
       proxySession: pmeta?.session ?? null,
       exitIp,
       statusCode,
+      requestedAt,
+      openedAt,
+      navMs,
+      pageError: pageErrors.length ? pageErrors.slice(0, 10).join(" | ") : null,
     };
   } catch (err) {
     if (closeSession) await closeSession().catch(() => {});
     const msg = err instanceof Error ? err.message : String(err);
+    pageErrors.push(`FATAL: ${msg}`.slice(0, 200));
     return {
       ok: false,
       ref: null,
@@ -464,6 +514,10 @@ export async function runBooking(
       proxySession: pmeta?.session ?? null,
       exitIp,
       statusCode,
+      requestedAt,
+      openedAt,
+      navMs,
+      pageError: pageErrors.length ? pageErrors.slice(0, 10).join(" | ") : null,
     };
   }
 }
@@ -490,6 +544,10 @@ export async function runActivation(
     proxySession: pmeta?.session ?? null,
     exitIp: null as string | null,
     statusCode: null as number | null,
+    requestedAt: null as string | null,
+    openedAt: null as string | null,
+    navMs: null as number | null,
+    pageError: null as string | null,
   };
 
   if (!toEmail) {
@@ -531,6 +589,10 @@ export async function runActivation(
   let closeSession: (() => Promise<void>) | null = null;
   let statusCode: number | null = null;
   let exitIp: string | null = null;
+  let requestedAt: string | null = null;
+  let openedAt: string | null = null;
+  let navMs: number | null = null;
+  const pageErrors: string[] = [];
   try {
     const session = await openBrowserContext(
       profileDirFor("register", profileKey),
@@ -539,10 +601,34 @@ export async function runActivation(
     closeSession = session.close;
 
     const page = await session.context.newPage();
+    page.on("pageerror", (e) => {
+      pageErrors.push(`JS: ${e.message}`.slice(0, 200));
+    });
+    page.on("requestfailed", (req) => {
+      const f = req.failure();
+      pageErrors.push(
+        `REQFAIL: ${req.url().slice(0, 80)} (${f?.errorText || "?"})`.slice(
+          0,
+          200,
+        ),
+      );
+    });
+    page.on("response", (res) => {
+      const s = res.status();
+      if (s >= 400) {
+        pageErrors.push(`HTTP ${s}: ${res.url().slice(0, 80)}`.slice(0, 200));
+      }
+    });
+
+    const t0 = Date.now();
+    requestedAt = new Date(t0).toISOString();
     const response = await page.goto(mail.link, {
       waitUntil: "domcontentloaded",
       timeout: 45000,
     });
+    const t1 = Date.now();
+    openedAt = new Date(t1).toISOString();
+    navMs = t1 - t0;
     statusCode = response ? response.status() : null;
     await page
       .waitForLoadState("networkidle", { timeout: 10000 })
@@ -579,6 +665,12 @@ export async function runActivation(
         ...baseMeta,
         exitIp,
         statusCode,
+        requestedAt,
+        openedAt,
+        navMs,
+        pageError: pageErrors.length
+          ? pageErrors.slice(0, 10).join(" | ")
+          : null,
       };
     }
 
@@ -590,10 +682,15 @@ export async function runActivation(
       ...baseMeta,
       exitIp,
       statusCode,
+      requestedAt,
+      openedAt,
+      navMs,
+      pageError: pageErrors.length ? pageErrors.slice(0, 10).join(" | ") : null,
     };
   } catch (err) {
     if (closeSession) await closeSession().catch(() => {});
     const msg = err instanceof Error ? err.message : String(err);
+    pageErrors.push(`FATAL: ${msg}`.slice(0, 200));
     return {
       ok: false,
       link: mail.link,
@@ -602,6 +699,10 @@ export async function runActivation(
       ...baseMeta,
       exitIp,
       statusCode,
+      requestedAt,
+      openedAt,
+      navMs,
+      pageError: pageErrors.length ? pageErrors.slice(0, 10).join(" | ") : null,
     };
   }
 }

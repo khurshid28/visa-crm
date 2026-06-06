@@ -25,6 +25,7 @@ import {
   isTelegramConfigured,
   type TelegramDocument,
 } from "./telegram";
+import { logBookStep } from "./log";
 
 // Yuklangan Excel/CSV fayllar saqlanadigan papka (loyiha ildizida).
 const IMPORTS_DIR = path.join(process.cwd(), "uploads", "imports");
@@ -173,16 +174,25 @@ async function runStageWithRetry(
     lastRef = result.ref ?? lastRef;
     ok = result.ok;
 
-    // Chiroyli, strukturali konsol log (worker oqimini kuzatish uchun):
-    // [BOOK] order ok=true user=ali.v.12 attempt=1/3 status=200 ip=185.x.x.x
-    //        proxy=geo.iproyal.com:12321 country=uz session=aliv12 dur=4200ms
-    console.log(
-      `[BOOK] ${stage} ok=${ok} user=${profileKey ?? "-"} ` +
-        `attempt=${attempt}/${limit} status=${result.statusCode ?? "-"} ` +
-        `ip=${result.exitIp ?? "-"} proxy=${result.proxyServer ?? "off"} ` +
-        `country=${result.proxyCountry ?? "-"} session=${result.proxySession ?? "-"} ` +
-        `dur=${durationMs}ms`,
-    );
+    // Chiroyli, rangli terminal log (worker oqimini kuzatish uchun).
+    logBookStep({
+      stage,
+      user: profileKey,
+      ok,
+      attempt,
+      maxAttempts: limit,
+      statusCode: result.statusCode,
+      exitIp: result.exitIp,
+      proxyServer: result.proxyServer,
+      proxyCountry: result.proxyCountry,
+      proxySession: result.proxySession,
+      requestedAt: result.requestedAt,
+      openedAt: result.openedAt,
+      navMs: result.navMs,
+      durationMs,
+      pageError: result.pageError,
+      note: result.note,
+    });
 
     await prisma.automationLog
       .create({
@@ -205,6 +215,10 @@ async function runStageWithRetry(
           proxySession: result.proxySession,
           exitIp: result.exitIp,
           statusCode: result.statusCode,
+          navMs: result.navMs,
+          pageError: result.pageError,
+          requestedAt: result.requestedAt ? new Date(result.requestedAt) : null,
+          openedAt: result.openedAt ? new Date(result.openedAt) : null,
           startedAt,
           finishedAt,
         },
@@ -373,13 +387,22 @@ async function processApplicant(
 
     // Aktivatsiya register bilan BIR XIL session (profil + IP) da ishladi.
     // Log'da exitIp/proxySession register'niki bilan bir xil bo'lishi kerak.
-    console.log(
-      `[BOOK] activation ok=${act.ok} user=${profileKey ?? "-"} ` +
-        `status=${act.statusCode ?? "-"} ip=${act.exitIp ?? "-"} ` +
-        `proxy=${act.proxyServer ?? "off"} country=${act.proxyCountry ?? "-"} ` +
-        `session=${act.proxySession ?? "-"} ` +
-        `dur=${actEnd.getTime() - actStart.getTime()}ms`,
-    );
+    logBookStep({
+      stage: "activation",
+      user: profileKey,
+      ok: act.ok,
+      statusCode: act.statusCode,
+      exitIp: act.exitIp,
+      proxyServer: act.proxyServer,
+      proxyCountry: act.proxyCountry,
+      proxySession: act.proxySession,
+      requestedAt: act.requestedAt,
+      openedAt: act.openedAt,
+      navMs: act.navMs,
+      durationMs: actEnd.getTime() - actStart.getTime(),
+      pageError: act.pageError,
+      note: act.note,
+    });
 
     await prisma.automationLog
       .create({
@@ -400,6 +423,10 @@ async function processApplicant(
           proxySession: act.proxySession,
           exitIp: act.exitIp,
           statusCode: act.statusCode,
+          navMs: act.navMs,
+          pageError: act.pageError,
+          requestedAt: act.requestedAt ? new Date(act.requestedAt) : null,
+          openedAt: act.openedAt ? new Date(act.openedAt) : null,
           startedAt: actStart,
           finishedAt: actEnd,
         },
