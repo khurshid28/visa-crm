@@ -34,7 +34,6 @@ import NameCell from "@/components/NameCell";
 import CredentialCell from "@/components/CredentialCell";
 import Select from "@/components/Select";
 import StatusBadge from "@/components/StatusBadge";
-import DateTimePicker from "@/components/DateTimePicker";
 import { useToast } from "@/components/Toast";
 
 type Applicant = {
@@ -70,8 +69,6 @@ type Group = {
   status: string;
   fileName: string | null;
   paused: boolean;
-  slotOpenAt: string | null;
-  slotCloseAt: string | null;
   slot?: {
     name: string;
     fromCountry: string;
@@ -84,17 +81,6 @@ type Group = {
   applicants: Applicant[];
 };
 
-// ISO yoki Date stringni datetime-local ("YYYY-MM-DDTHH:mm") formatga keltiradi.
-function toLocalInput(value: string | null): string {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}`;
-}
-
 export default function GroupDetail({ group }: { group: Group }) {
   const router = useRouter();
   const { toast, confirm } = useToast();
@@ -104,28 +90,7 @@ export default function GroupDetail({ group }: { group: Group }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
-  const [savingDate, setSavingDate] = useState(false);
-  const [slotOpenAt, setSlotOpenAt] = useState(toLocalInput(group.slotOpenAt));
   const PER_PAGE = 10;
-
-  async function saveSlotDate(value: string) {
-    setSlotOpenAt(value);
-    setSavingDate(true);
-    try {
-      const res = await fetch(`/api/groups/${group.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slotOpenAt: value || null }),
-      });
-      if (!res.ok) throw new Error();
-      toast(value ? "Guruh sanasi saqlandi" : "Guruh sanasi tozalandi");
-      router.refresh();
-    } catch {
-      toast("Sanani saqlab bo'lmadi", "error");
-    } finally {
-      setSavingDate(false);
-    }
-  }
 
   async function bookGroup(stage: "register" | "order") {
     setBusyId("group");
@@ -481,45 +446,28 @@ export default function GroupDetail({ group }: { group: Group }) {
               <span className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-2 py-1">
                 <Calendar size={13} variant="Bold" className="text-white/70" />
                 Slot: <span className="font-semibold">{group.slot.name}</span>
-                <span className="text-white/50">— monitoring slot darajasida</span>
+                <span className="text-white/50">
+                  — vaqt va monitoring slot bo'yicha
+                </span>
               </span>
             ) : (
               <span className="text-white/60">Slotga bog'lanmagan</span>
+            )}
+            {group.paused && (
+              <span className="inline-flex items-center gap-1 rounded-lg bg-amber-400/90 px-2 py-1 font-semibold text-amber-950">
+                <Pause size={12} variant="Bold" /> Pauzada — GO ga qo'shilmaydi
+              </span>
             )}
           </div>
         </div>
       </div>
 
-      {/* Guruh sanasi — header tashqarisida (popover kesilmasligi uchun) */}
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-soft dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
-          <Calendar size={16} variant="Bold" className="text-brand-500" />
-          Guruh sanasi
-        </div>
-        <div className="w-[230px]">
-          <DateTimePicker value={slotOpenAt} onChange={saveSlotDate} />
-        </div>
-        {savingDate && (
-          <span className="text-xs text-slate-400">saqlanmoqda…</span>
-        )}
-        {slotOpenAt && (
-          <button
-            type="button"
-            onClick={() => saveSlotDate("")}
-            className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs text-slate-500 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
-          >
-            Tozalash
-          </button>
-        )}
-        <span className="ml-auto text-xs text-slate-400">
-          Bu guruhning mo'ljal sanasi — monitoring slot darajasida ketadi
-        </span>
-      </div>
-
       <p className="text-xs text-slate-400">
-        Status faqat tizim tomonidan o'zgaradi (zakas / skript natijasi). Qo'lda
-        faqat <span className="font-medium text-slate-500">Arxivlash</span>
-        &nbsp;mumkin.
+        Vaqt va monitoring <span className="font-medium text-slate-500">slot</span>{" "}
+        bo'yicha ketadi. Guruhga alohida sana berilmaydi — kerak bo'lsa{" "}
+        <span className="font-medium text-slate-500">Pauza</span> qiling.
+        Status faqat tizim tomonidan o'zgaradi; qo'lda faqat{" "}
+        <span className="font-medium text-slate-500">Arxivlash</span> mumkin.
       </p>
 
       {/* Qidiruv + filtr */}
