@@ -20,6 +20,7 @@ import {
   Pause,
   Play,
   CloseCircle,
+  Calendar,
 } from "iconsax-react";
 import {
   GROUP_STATUS,
@@ -33,7 +34,7 @@ import NameCell from "@/components/NameCell";
 import CredentialCell from "@/components/CredentialCell";
 import Select from "@/components/Select";
 import StatusBadge from "@/components/StatusBadge";
-import { fmtDateTime } from "@/lib/date";
+import DateTimePicker from "@/components/DateTimePicker";
 import { useToast } from "@/components/Toast";
 
 type Applicant = {
@@ -69,6 +70,8 @@ type Group = {
   status: string;
   fileName: string | null;
   paused: boolean;
+  slotOpenAt: string | null;
+  slotCloseAt: string | null;
   slot?: {
     name: string;
     fromCountry: string;
@@ -81,21 +84,16 @@ type Group = {
   applicants: Applicant[];
 };
 
-type SlotMonitorState = {
-  active: boolean;
-  paused: boolean;
-  slotAt: string | null;
-  intervalSeconds: number;
-  windowMinutes: number;
-  lastCheckAt: string | null;
-  lastMessage: string;
-};
-
-type SlotQueue = {
-  groups: number;
-  registeredTotal: number;
-  registeredComplete: number;
-};
+// ISO yoki Date stringni datetime-local ("YYYY-MM-DDTHH:mm") formatga keltiradi.
+function toLocalInput(value: string | null): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
 
 export default function GroupDetail({ group }: { group: Group }) {
   const router = useRouter();
@@ -106,19 +104,26 @@ export default function GroupDetail({ group }: { group: Group }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
-  const [monitor, setMonitor] = useState<SlotMonitorState | null>(null);
-  const [queue, setQueue] = useState<SlotQueue | null>(null);
+  const [savingDate, setSavingDate] = useState(false);
+  const [slotOpenAt, setSlotOpenAt] = useState(toLocalInput(group.slotOpenAt));
   const PER_PAGE = 10;
 
-  async function refreshMonitor() {
+  async function saveSlotDate(value: string) {
+    setSlotOpenAt(value);
+    setSavingDate(true);
     try {
-      const res = await fetch("/api/slot-monitor", { cache: "no-store" });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data) return;
-      setMonitor(data.state ?? null);
-      setQueue(data.queue ?? null);
+      const res = await fetch(`/api/groups/${group.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slotOpenAt: value || null }),
+      });
+      if (!res.ok) throw new Error();
+      toast(value ? "Guruh sanasi saqlandi" : "Guruh sanasi tozalandi");
+      router.refresh();
     } catch {
-      // UI ishlashini buzmaymiz.
+      toast("Sanani saqlab bo'lmadi", "error");
+    } finally {
+      setSavingDate(false);
     }
   }
 
@@ -312,12 +317,6 @@ export default function GroupDetail({ group }: { group: Group }) {
     setPage(1);
   }, [search, statusFilter]);
 
-  useEffect(() => {
-    refreshMonitor();
-    const id = window.setInterval(refreshMonitor, 5_000);
-    return () => window.clearInterval(id);
-  }, []);
-
   return (
     <div className="space-y-6">
       {busyId === "group" && (
@@ -474,14 +473,36 @@ export default function GroupDetail({ group }: { group: Group }) {
           <HeaderStat label="Buyurtma berilgan" value={ordered} />
         </div>
         <div className="border-t border-white/15 px-6 py-3 text-xs text-white/80">
-          {waitingSlot ? "Slot ochilishini kutilmoqda" : "Jarayon holati"}
-          {queue
-            ? ` · Umumiy REGISTERED: ${queue.registeredTotal} ta, to'liq: ${queue.registeredComplete} ta, guruhlar: ${queue.groups}`
-            : ""}
-          {monitor?.paused ? " · STATUS: PAUSE" : ""}
-          {monitor?.active && monitor?.slotAt
-            ? ` · Slot vaqti: ${fmtDateTime(monitor.slotAt)}`
-            : ""}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-medium text-white/90">
+              {waitingSlot ? "Slot ochilishini kutilmoqda" : "Jarayon holati"}
+            </span>
+            {group.slot ? (
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-2 py-1">
+                <Calendar size={13} variant="Bold" className="text-white/70" />
+                Slot: <span className="font-semibold">{group.slot.name}</span>
+                <span className="text-white/50">— monitoring slot darajasida</span>
+              </span>
+            ) : (
+              <span className="text-white/60">Slotga bog'lanmagan</span>
+            )}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-white/70">Guruh sanasi:</span>
+            <div className="w-[220px]">
+              <DateTimePicker value={slotOpenAt} onChange={saveSlotDate} />
+            </div>
+            {savingDate && <span className="text-white/60">saqlanmoqda…</span>}
+            {slotOpenAt && (
+              <button
+                type="button"
+                onClick={() => saveSlotDate("")}
+                className="rounded-lg bg-white/10 px-2 py-1 text-white/70 ring-1 ring-white/20 transition hover:bg-white/20"
+              >
+                Tozalash
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

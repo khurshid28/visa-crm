@@ -176,8 +176,16 @@ export default async function GroupsPage({
                       )}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap text-slate-400">
-                    {fmtDateTime(g.createdAt)}
+                  <td className="whitespace-nowrap">
+                    {g.slotOpenAt ? (
+                      <span className="inline-flex items-center gap-1 font-medium text-slate-600 dark:text-slate-300">
+                        {fmtDateTime(g.slotOpenAt)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 dark:text-slate-600">
+                        {fmtDateTime(g.createdAt)}
+                      </span>
+                    )}
                   </td>
                   <td className="text-right">
                     <Link

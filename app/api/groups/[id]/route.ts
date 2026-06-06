@@ -45,6 +45,20 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json(group);
   }
 
+  // Guruhning o'z sanasi (slotOpenAt / slotCloseAt) — monitoring slot darajasida,
+  // bu faqat guruhning mo'ljal sanasi sifatida ko'rsatiladi.
+  if (body.slotOpenAt !== undefined || body.slotCloseAt !== undefined) {
+    const data: Record<string, unknown> = {};
+    if (body.slotOpenAt !== undefined) {
+      data.slotOpenAt = body.slotOpenAt ? new Date(body.slotOpenAt) : null;
+    }
+    if (body.slotCloseAt !== undefined) {
+      data.slotCloseAt = body.slotCloseAt ? new Date(body.slotCloseAt) : null;
+    }
+    const group = await prisma.group.update({ where: { id }, data });
+    return NextResponse.json(group);
+  }
+
   const data: Record<string, unknown> = {};
   if (typeof body.name === "string") data.name = body.name;
   if (typeof body.note === "string") data.note = body.note;
