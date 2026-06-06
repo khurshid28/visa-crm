@@ -90,6 +90,53 @@ function envHeadless(): boolean {
   return v !== "false" && v !== "0";
 }
 
+// Real brauzerga o'xshatish uchun fingerprint sozlamalari (.env dan override).
+const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+function fingerprintOptions() {
+  const userAgent = (
+    process.env.BOOKING_USER_AGENT || DEFAULT_USER_AGENT
+  ).trim();
+  const locale = (process.env.BOOKING_LOCALE || "en-US").trim();
+  const timezoneId = (process.env.BOOKING_TIMEZONE || "Asia/Tashkent").trim();
+  const vp = (process.env.BOOKING_VIEWPORT || "1366x768").trim();
+  const m = vp.match(/^(\d{3,5})\s*[x×]\s*(\d{3,5})$/i);
+  const viewport = m
+    ? { width: Number(m[1]), height: Number(m[2]) }
+    : { width: 1366, height: 768 };
+  return {
+    userAgent,
+    locale,
+    timezoneId,
+    viewport,
+    deviceScaleFactor: 1,
+    extraHTTPHeaders: {
+      "Accept-Language": `${locale},en;q=0.9`,
+    } as Record<string, string>,
+  };
+}
+
+// Stealth plugin faqat bir marta ulanadi (chromium global obyektga).
+let stealthApplied = false;
+async function getStealthChromium() {
+  // playwright-extra chromium'ni puppeteer-extra-plugin-stealth bilan o'raydi —
+  // navigator.webdriver, plugins, languages, WebGL kabi bot-belgilarini yashiradi.
+  const mod: any = await import("playwright-extra");
+  const chromium = mod.chromium ?? mod.default?.chromium ?? mod.default;
+  if (!stealthApplied) {
+    try {
+      const stealthMod: any = await import("puppeteer-extra-plugin-stealth");
+      const StealthPlugin = stealthMod.default ?? stealthMod;
+      chromium.use(StealthPlugin());
+      stealthApplied = true;
+    } catch {
+      // Stealth ulanmasa ham oddiy chromium bilan davom etamiz.
+    }
+  }
+  return chromium;
+}
+
 /** Gmail/profil kalitini papka nomi uchun xavfsiz holatga keltiradi. */
 export function sanitizeProfileKey(key: string): string {
   return (key || "")
@@ -119,13 +166,20 @@ async function openBrowserContext(
   profileDir: string,
   proxyTarget?: ProxyTarget,
 ) {
-  const { chromium } = await import("playwright");
+  const chromium = await getStealthChromium();
   const proxy = proxyTarget ? proxyFor(proxyTarget) : undefined;
+  const fp = fingerprintOptions();
 
   if (profileDir) {
     const context = await chromium.launchPersistentContext(profileDir, {
       headless: envHeadless(),
       ...(proxy ? { proxy } : {}),
+      userAgent: fp.userAgent,
+      locale: fp.locale,
+      timezoneId: fp.timezoneId,
+      viewport: fp.viewport,
+      deviceScaleFactor: fp.deviceScaleFactor,
+      extraHTTPHeaders: fp.extraHTTPHeaders,
     });
     return {
       context,
@@ -137,7 +191,14 @@ async function openBrowserContext(
     headless: envHeadless(),
     ...(proxy ? { proxy } : {}),
   });
-  const context = await browser.newContext();
+  const context = await browser.newContext({
+    userAgent: fp.userAgent,
+    locale: fp.locale,
+    timezoneId: fp.timezoneId,
+    viewport: fp.viewport,
+    deviceScaleFactor: fp.deviceScaleFactor,
+    extraHTTPHeaders: fp.extraHTTPHeaders,
+  });
   return {
     context,
     close: async () => browser.close(),
@@ -379,7 +440,7 @@ export async function runBooking(
     });
     closeSession = session.close;
 
-    const page = await session.context.newPage();
+    const page: import("playwright").Page = await session.context.newPage();
 
     // Har bir navigatsiyani (redirect/yangi sahifa) kuzatamiz.
     page.on("framenavigated", (frame) => {
@@ -611,7 +672,7 @@ export async function runActivation(
     );
     closeSession = session.close;
 
-    const page = await session.context.newPage();
+    const page: import("playwright").Page = await session.context.newPage();
     page.on("pageerror", (e) => {
       pageErrors.push(`JS: ${e.message}`.slice(0, 200));
     });
