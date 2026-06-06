@@ -94,12 +94,51 @@ function envHeadless(): boolean {
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-function fingerprintOptions() {
+// Proxy davlatiga mos timezone + til (Accept-Language). Exit IP qaysi davlatda
+// bo'lsa, timezone va til SHU davlatga moslashadi — aks holda anti-bot (Cloudflare)
+// IP-timezone nomuvofiqligini sezadi va captcha/blok beradi.
+const COUNTRY_FP: Record<
+  string,
+  { timezone: string; locale: string; acceptLanguage: string }
+> = {
+  uz: {
+    timezone: "Asia/Tashkent",
+    locale: "ru-RU",
+    acceptLanguage: "uz-UZ,uz;q=0.9,ru;q=0.8,en;q=0.7",
+  },
+  kz: {
+    timezone: "Asia/Almaty",
+    locale: "ru-RU",
+    acceptLanguage: "ru-RU,ru;q=0.9,kk;q=0.8,en;q=0.7",
+  },
+  ru: {
+    timezone: "Europe/Moscow",
+    locale: "ru-RU",
+    acceptLanguage: "ru-RU,ru;q=0.9,en;q=0.8",
+  },
+};
+
+function fingerprintOptions(country?: string | null) {
   const userAgent = (
     process.env.BOOKING_USER_AGENT || DEFAULT_USER_AGENT
   ).trim();
-  const locale = (process.env.BOOKING_LOCALE || "en-US").trim();
-  const timezoneId = (process.env.BOOKING_TIMEZONE || "Asia/Tashkent").trim();
+
+  // Exit IP davlatiga mos fingerprint (uz/kz/...). Topilmasa — .env yoki default.
+  const cc = (country || "").trim().toLowerCase();
+  const geo = COUNTRY_FP[cc];
+
+  const locale = (process.env.BOOKING_LOCALE || geo?.locale || "en-US").trim();
+  const timezoneId = (
+    process.env.BOOKING_TIMEZONE ||
+    geo?.timezone ||
+    "Asia/Tashkent"
+  ).trim();
+  const acceptLanguage = (
+    process.env.BOOKING_ACCEPT_LANGUAGE ||
+    geo?.acceptLanguage ||
+    `${locale},en;q=0.9`
+  ).trim();
+
   const vp = (process.env.BOOKING_VIEWPORT || "1366x768").trim();
   const m = vp.match(/^(\d{3,5})\s*[x×]\s*(\d{3,5})$/i);
   const viewport = m
@@ -112,7 +151,7 @@ function fingerprintOptions() {
     viewport,
     deviceScaleFactor: 1,
     extraHTTPHeaders: {
-      "Accept-Language": `${locale},en;q=0.9`,
+      "Accept-Language": acceptLanguage,
     } as Record<string, string>,
   };
 }
@@ -168,7 +207,9 @@ async function openBrowserContext(
 ) {
   const chromium = await getStealthChromium();
   const proxy = proxyTarget ? proxyFor(proxyTarget) : undefined;
-  const fp = fingerprintOptions();
+  // Fingerprint'ni proxy exit IP davlatiga moslaymiz (timezone + til).
+  const proxyCountry = proxyTarget ? proxyMetaFor(proxyTarget)?.country : null;
+  const fp = fingerprintOptions(proxyCountry);
 
   if (profileDir) {
     const context = await chromium.launchPersistentContext(profileDir, {
