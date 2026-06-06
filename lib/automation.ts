@@ -90,6 +90,62 @@ function envHeadless(): boolean {
   return v !== "false" && v !== "0";
 }
 
+// Chromium'ni "boshqarilayotgan brauzer" belgilarisiz ishga tushirish argumentlari.
+// --disable-blink-features=AutomationControlled => navigator.webdriver yo'qoladi.
+function launchArgs(): string[] {
+  return [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process,AutomationControlled",
+    "--disable-infobars",
+    "--no-default-browser-check",
+    "--no-first-run",
+    "--disable-dev-shm-usage",
+    "--disable-popup-blocking",
+  ];
+}
+
+// Inson kabi tasodifiy qisqa kutish.
+function rand(min: number, max: number): number {
+  return Math.floor(min + Math.random() * (max - min));
+}
+async function humanPause(min = 120, max = 380): Promise<void> {
+  await new Promise((r) => setTimeout(r, rand(min, max)));
+}
+
+// Brauzerga ochilishi bilan qo'shimcha "inson" belgilarini in'ektsiya qiladi
+// (stealth ustiga: webdriver=false, languages, chrome obyekt, permissions).
+async function applyStealthInit(
+  context: import("playwright").BrowserContext,
+  acceptLanguage: string,
+): Promise<void> {
+  const langs = acceptLanguage
+    .split(",")
+    .map((s) => s.split(";")[0].trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  await context
+    .addInitScript((languages: string[]) => {
+      try {
+        Object.defineProperty(navigator, "webdriver", { get: () => false });
+        Object.defineProperty(navigator, "languages", {
+          get: () => (languages.length ? languages : ["en-US", "en"]),
+        });
+        (window as any).chrome = (window as any).chrome || { runtime: {} };
+        const anyNav = navigator as any;
+        const orig = anyNav.permissions?.query?.bind(anyNav.permissions);
+        if (orig) {
+          anyNav.permissions.query = (p: any) =>
+            p && p.name === "notifications"
+              ? Promise.resolve({ state: Notification.permission })
+              : orig(p);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, langs)
+    .catch(() => {});
+}
+
 // Real brauzerga o'xshatish uchun fingerprint sozlamalari (.env dan override).
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -214,6 +270,7 @@ async function openBrowserContext(
   if (profileDir) {
     const context = await chromium.launchPersistentContext(profileDir, {
       headless: envHeadless(),
+      args: launchArgs(),
       ...(proxy ? { proxy } : {}),
       userAgent: fp.userAgent,
       locale: fp.locale,
@@ -222,6 +279,7 @@ async function openBrowserContext(
       deviceScaleFactor: fp.deviceScaleFactor,
       extraHTTPHeaders: fp.extraHTTPHeaders,
     });
+    await applyStealthInit(context, fp.extraHTTPHeaders["Accept-Language"]);
     return {
       context,
       close: async () => context.close(),
@@ -230,6 +288,7 @@ async function openBrowserContext(
 
   const browser = await chromium.launch({
     headless: envHeadless(),
+    args: launchArgs(),
     ...(proxy ? { proxy } : {}),
   });
   const context = await browser.newContext({
@@ -240,6 +299,7 @@ async function openBrowserContext(
     deviceScaleFactor: fp.deviceScaleFactor,
     extraHTTPHeaders: fp.extraHTTPHeaders,
   });
+  await applyStealthInit(context, fp.extraHTTPHeaders["Accept-Language"]);
   return {
     context,
     close: async () => browser.close(),
@@ -552,6 +612,8 @@ export async function runBooking(
         value,
       );
       if (ok) filled.push(field);
+      // Inson kabi: har bir maydondan keyin qisqa tasodifiy pauza.
+      await humanPause();
     }
 
     // Cloudflare Turnstile bo'lsa — token to'lguncha (captcha o'tguncha) kutamiz.
@@ -559,6 +621,9 @@ export async function runBooking(
     if (captcha.present && !captcha.solved) {
       pageErrors.push("turnstile: token kutib olinmadi (captcha o'tmadi)");
     }
+
+    // Inson kabi: yuborishdan oldin biroz "o'ylab turish".
+    await humanPause(400, 900);
 
     // Submit tugmasini bosamiz (agar topilsa).
     const submitted = await clickSubmit(page);
@@ -885,14 +950,16 @@ async function fillSmartField(
         continue;
       }
 
-      // Oddiy matn inputi / textarea.
+      // Oddiy matn inputi / textarea — inson kabi belgilab-belgilab yozamiz.
+      const delay = rand(40, 110); // har belgi orasida ms (tabiiy tezlik)
       try {
-        await el.fill(value, { timeout: 4000 });
+        await el.click({ timeout: 2000 }).catch(() => {});
+        await el.fill("", { timeout: 2000 }).catch(() => {});
+        await el.type(value, { delay, timeout: 8000 });
         return true;
       } catch {
-        // ba'zi inputlar fill'ni qabul qilmaydi — type bilan urinib ko'ramiz.
-        await el.click({ timeout: 2000 }).catch(() => {});
-        await el.type(value, { timeout: 4000 }).catch(() => {});
+        // type ishlamasa — to'g'ridan-to'g'ri fill bilan urinib ko'ramiz.
+        await el.fill(value, { timeout: 4000 }).catch(() => {});
         return true;
       }
     }
