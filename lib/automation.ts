@@ -14,6 +14,13 @@
  * ====================================================================
  */
 
+import {
+  proxyFor,
+  proxyMetaFor,
+  proxyIpEchoUrl,
+  shouldLogExitIp,
+  type ProxyTarget,
+} from "./proxy";
 export type AutomationApplicant = {
   surname: string;
   name: string;
@@ -35,6 +42,11 @@ export type AutomationResult = {
   url: string; // boshlang'ich (target) URL
   finalUrl: string; // urinish oxirida brauzer turgan URL
   visitedUrls: string[]; // urinish davomida ochilgan barcha URL'lar (tartib bilan)
+  proxyServer: string | null; // ulangan proxy gateway (host:port) yoki null
+  proxyCountry: string | null; // proxy davlati (uz/kz)
+  proxySession: string | null; // sticky session id (qaysi user IP'si)
+  exitIp: string | null; // proxy orqali chiqqan tashqi IP
+  statusCode: number | null; // asosiy sahifa HTTP status kodi
 };
 
 export type ActivationResult = {
@@ -42,9 +54,14 @@ export type ActivationResult = {
   link: string | null; // gmail'dan topilgan aktivatsiya linki
   note: string;
   to: string | null; // qaysi email manziliga xat keldi
+  proxyServer: string | null; // register bilan BIR XIL proxy (tasdiq uchun)
+  proxyCountry: string | null;
+  proxySession: string | null; // register bilan bir xil session id bo'lishi kerak
+  exitIp: string | null; // proxy orqali chiqqan IP (register bilan bir xil)
+  statusCode: number | null; // aktivatsiya sahifasi HTTP status kodi
 };
 
-type Stage = "register" | "order";
+type Stage = "register" | "login" | "order";
 
 // Har bir maydon uchun forma elementlarini topish kalit so'zlari (kichik harf).
 const FIELD_KEYWORDS: Record<keyof AutomationApplicant, string[]> = {
@@ -90,12 +107,17 @@ function profileDirFor(stage: Stage, profileKey?: string | null): string {
   return `${base}-${stage}`;
 }
 
-async function openBrowserContext(profileDir: string) {
+async function openBrowserContext(
+  profileDir: string,
+  proxyTarget?: ProxyTarget,
+) {
   const { chromium } = await import("playwright");
+  const proxy = proxyTarget ? proxyFor(proxyTarget) : undefined;
 
   if (profileDir) {
     const context = await chromium.launchPersistentContext(profileDir, {
       headless: envHeadless(),
+      ...(proxy ? { proxy } : {}),
     });
     return {
       context,
@@ -103,7 +125,10 @@ async function openBrowserContext(profileDir: string) {
     };
   }
 
-  const browser = await chromium.launch({ headless: envHeadless() });
+  const browser = await chromium.launch({
+    headless: envHeadless(),
+    ...(proxy ? { proxy } : {}),
+  });
   const context = await browser.newContext();
   return {
     context,
@@ -112,11 +137,23 @@ async function openBrowserContext(profileDir: string) {
 }
 
 function urlForStage(stage: Stage): string | null {
-  const u =
-    stage === "order"
-      ? process.env.BOOKING_ORDER_URL
-      : process.env.BOOKING_REGISTER_URL;
+  let u: string | undefined;
+  if (stage === "order") u = process.env.BOOKING_ORDER_URL;
+  else if (stage === "login") u = process.env.BOOKING_LOGIN_URL;
+  else u = process.env.BOOKING_REGISTER_URL;
   return u && u.trim() ? u.trim() : null;
+}
+
+function stageLabel(stage: Stage): string {
+  if (stage === "order") return "Buyurtma";
+  if (stage === "login") return "Login";
+  return "Ro'yxat";
+}
+
+function stageEnvName(stage: Stage): string {
+  if (stage === "order") return "ORDER";
+  if (stage === "login") return "LOGIN";
+  return "REGISTER";
 }
 
 export type SlotCheckResult = {
@@ -166,8 +203,10 @@ export async function checkSlotOpen(): Promise<SlotCheckResult> {
 
   let closeSession: (() => Promise<void>) | null = null;
   try {
-    const profileDir = profileDirFor("order") || profileDirFor("register");
-    const session = await openBrowserContext(profileDir);
+    // Slot tekshiruvi har 5 soniyada ishlaydi — har safar YANGI (rotating) IP
+    // ishlatamiz, profil saqlamaymiz. Shunda bitta IP monitoring bilan
+    // charchab bloklanmaydi va booking IP'lari toza qoladi.
+    const session = await openBrowserContext("", { rotating: true });
     closeSession = session.close;
 
     const page = await session.context.newPage();
@@ -240,6 +279,31 @@ function extractRef(text: string): string | null {
 }
 
 /**
+ * Proxy orqali chiqqan tashqi (exit) IP'ni aniqlaydi (log uchun).
+ * Sahifa context'idagi request ishlatiladi — demak o'sha proxy orqali ketadi.
+ * Xato bo'lsa null qaytaradi (asosiy oqim buzilmaydi).
+ */
+async function readExitIp(
+  page: import("playwright").Page,
+): Promise<string | null> {
+  try {
+    const res = await page.request.get(proxyIpEchoUrl(), { timeout: 8000 });
+    const txt = (await res.text()).trim();
+    try {
+      const j = JSON.parse(txt);
+      const ip = j.ip || j.query || j.YourFuckingIPAddress || null;
+      if (ip) return String(ip).slice(0, 60);
+    } catch {
+      /* JSON emas — xom matn */
+    }
+    const m = txt.match(/(\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{6,}/);
+    return m ? m[0].slice(0, 60) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Bitta arizachi uchun bitta bosqichni bajaradi.
  * Playwright dinamik import qilinadi (build/serverless'ni buzmaslik uchun).
  */
@@ -253,17 +317,34 @@ export async function runBooking(
     return {
       ok: false,
       ref: null,
-      note: `URL sozlanmagan (.env: BOOKING_${stage === "order" ? "ORDER" : "REGISTER"}_URL)`,
+      note: `URL sozlanmagan (.env: BOOKING_${stageEnvName(stage)}_URL)`,
       filled: [],
       url: "",
       finalUrl: "",
       visitedUrls: [],
+      proxyServer: null,
+      proxyCountry: null,
+      proxySession: null,
+      exitIp: null,
+      statusCode: null,
     };
   }
 
   let closeSession: (() => Promise<void>) | null = null;
   const filled: string[] = [];
   const visitedUrls: string[] = [];
+
+  // Proxy meta (parolsiz) — log uchun. Sticky: profileKey bo'yicha.
+  const proxyTarget: ProxyTarget = { profileKey: opts?.profileKey ?? null };
+  const pmeta = proxyMetaFor(
+    proxyTarget.profileKey
+      ? proxyTarget
+      : {
+          profileKey: applicant.generatedEmail || applicant.email || null,
+        },
+  );
+  let statusCode: number | null = null;
+  let exitIp: string | null = null;
 
   // Brauzer qaysi sahifaga o'tsa — tartib bilan yozib boramiz (takrorsiz).
   const trackUrl = (u: string) => {
@@ -275,7 +356,9 @@ export async function runBooking(
   try {
     const profileKey =
       opts?.profileKey || applicant.generatedEmail || applicant.email || null;
-    const session = await openBrowserContext(profileDirFor(stage, profileKey));
+    const session = await openBrowserContext(profileDirFor(stage, profileKey), {
+      profileKey,
+    });
     closeSession = session.close;
 
     const page = await session.context.newPage();
@@ -289,8 +372,17 @@ export async function runBooking(
       }
     });
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    const response = await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    statusCode = response ? response.status() : null;
     trackUrl(page.url());
+
+    // Proxy yoqilgan bo'lsa — tashqi (exit) IP'ni aniqlaymiz (log uchun).
+    if (shouldLogExitIp()) {
+      exitIp = await readExitIp(page);
+    }
 
     // Har bir maydonni topib to'ldiramiz.
     const values: Partial<Record<keyof AutomationApplicant, string>> = {
@@ -337,7 +429,7 @@ export async function runBooking(
     closeSession = null;
 
     const note =
-      `${stage === "order" ? "Buyurtma" : "Ro'yxat"}: ` +
+      `${stageLabel(stage)}: ` +
       `${filled.length} maydon to'ldirildi` +
       (submitted ? ", forma yuborildi" : ", submit tugmasi topilmadi") +
       (ref ? `, ref: ${ref}` : "");
@@ -350,6 +442,11 @@ export async function runBooking(
       url,
       finalUrl,
       visitedUrls,
+      proxyServer: pmeta?.server ?? null,
+      proxyCountry: pmeta?.country ?? null,
+      proxySession: pmeta?.session ?? null,
+      exitIp,
+      statusCode,
     };
   } catch (err) {
     if (closeSession) await closeSession().catch(() => {});
@@ -362,6 +459,11 @@ export async function runBooking(
       url,
       finalUrl: visitedUrls[visitedUrls.length - 1] || url,
       visitedUrls,
+      proxyServer: pmeta?.server ?? null,
+      proxyCountry: pmeta?.country ?? null,
+      proxySession: pmeta?.session ?? null,
+      exitIp,
+      statusCode,
     };
   }
 }
@@ -378,8 +480,26 @@ export async function runActivation(
   opts?: { profileKey?: string | null },
 ): Promise<ActivationResult> {
   const toEmail = applicant.generatedEmail || applicant.email || null;
+  // Aktivatsiya register bilan BIR XIL session (profil + sticky IP) ishlatadi.
+  const profileKey = opts?.profileKey || toEmail || null;
+  const pmeta = proxyMetaFor({ profileKey });
+  // Bo'sh (proxy yo'q) natija uchun umumiy meta.
+  const baseMeta = {
+    proxyServer: pmeta?.server ?? null,
+    proxyCountry: pmeta?.country ?? null,
+    proxySession: pmeta?.session ?? null,
+    exitIp: null as string | null,
+    statusCode: null as number | null,
+  };
+
   if (!toEmail) {
-    return { ok: false, link: null, to: null, note: "Email manzili yo'q" };
+    return {
+      ok: false,
+      link: null,
+      to: null,
+      note: "Email manzili yo'q",
+      ...baseMeta,
+    };
   }
 
   const { isMailListenerEnabled, waitForActivationMail } =
@@ -392,6 +512,7 @@ export async function runActivation(
       link: null,
       to: toEmail,
       note: "Aktivatsiya o'tkazib yuborildi (IMAP sozlanmagan)",
+      ...baseMeta,
     };
   }
 
@@ -402,26 +523,34 @@ export async function runActivation(
       link: null,
       to: toEmail,
       note: "Aktivatsiya xati topilmadi (gmail'da link kelmadi)",
+      ...baseMeta,
     };
   }
 
-  // Linkni userning profilida ochamiz.
+  // Linkni userning profilida ochamiz (register bilan BIR XIL profil + IP).
   let closeSession: (() => Promise<void>) | null = null;
+  let statusCode: number | null = null;
+  let exitIp: string | null = null;
   try {
-    const profileKey = opts?.profileKey || toEmail;
     const session = await openBrowserContext(
       profileDirFor("register", profileKey),
+      { profileKey },
     );
     closeSession = session.close;
 
     const page = await session.context.newPage();
-    await page.goto(mail.link, {
+    const response = await page.goto(mail.link, {
       waitUntil: "domcontentloaded",
       timeout: 45000,
     });
+    statusCode = response ? response.status() : null;
     await page
       .waitForLoadState("networkidle", { timeout: 10000 })
       .catch(() => {});
+
+    if (shouldLogExitIp()) {
+      exitIp = await readExitIp(page);
+    }
 
     const body = (
       (await page
@@ -447,6 +576,9 @@ export async function runActivation(
         link: mail.link,
         to: toEmail,
         note: "Aktivatsiya linki yaroqsiz/eskirgan",
+        ...baseMeta,
+        exitIp,
+        statusCode,
       };
     }
 
@@ -455,6 +587,9 @@ export async function runActivation(
       link: mail.link,
       to: toEmail,
       note: "Aktivatsiya bajarildi (link ochildi)",
+      ...baseMeta,
+      exitIp,
+      statusCode,
     };
   } catch (err) {
     if (closeSession) await closeSession().catch(() => {});
@@ -464,6 +599,9 @@ export async function runActivation(
       link: mail.link,
       to: toEmail,
       note: `Aktivatsiya xatosi: ${msg.slice(0, 200)}`,
+      ...baseMeta,
+      exitIp,
+      statusCode,
     };
   }
 }

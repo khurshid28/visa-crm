@@ -139,9 +139,10 @@ type ApplicantRow = Awaited<ReturnType<typeof prisma.applicant.findUnique>>;
 
 // Bitta arizachi, bitta bosqich — 3 martagacha urinadi, har urinishni
 // AutomationLog'ga yozadi, vaqt (ms) va status'ni saqlaydi.
+// stage: queue bosqichlari (register/order) + ichki "login" bosqichi.
 async function runStageWithRetry(
   applicant: NonNullable<ApplicantRow>,
-  stage: Stage,
+  stage: "register" | "login" | "order",
   workerProfile?: string | null,
 ): Promise<{
   ok: boolean;
@@ -172,6 +173,17 @@ async function runStageWithRetry(
     lastRef = result.ref ?? lastRef;
     ok = result.ok;
 
+    // Chiroyli, strukturali konsol log (worker oqimini kuzatish uchun):
+    // [BOOK] order ok=true user=ali.v.12 attempt=1/3 status=200 ip=185.x.x.x
+    //        proxy=geo.iproyal.com:12321 country=uz session=aliv12 dur=4200ms
+    console.log(
+      `[BOOK] ${stage} ok=${ok} user=${profileKey ?? "-"} ` +
+        `attempt=${attempt}/${limit} status=${result.statusCode ?? "-"} ` +
+        `ip=${result.exitIp ?? "-"} proxy=${result.proxyServer ?? "off"} ` +
+        `country=${result.proxyCountry ?? "-"} session=${result.proxySession ?? "-"} ` +
+        `dur=${durationMs}ms`,
+    );
+
     await prisma.automationLog
       .create({
         data: {
@@ -188,6 +200,11 @@ async function runStageWithRetry(
             ? result.visitedUrls.join("\n")
             : null,
           workerProfile: workerProfile ?? null,
+          proxyServer: result.proxyServer,
+          proxyCountry: result.proxyCountry,
+          proxySession: result.proxySession,
+          exitIp: result.exitIp,
+          statusCode: result.statusCode,
           startedAt,
           finishedAt,
         },
@@ -273,6 +290,45 @@ async function processApplicant(
     }
   }
 
+  // order: LOGIN (token olish) — register'dan keyin, order'dan oldin.
+  // Bir xil profil + bir xil sticky IP => sessiya/token saqlanadi.
+  // Faqat BOOKING_LOGIN_URL sozlangan bo'lsa ishlaydi (aks holda o'tkaziladi).
+  if (stage === "order" && (process.env.BOOKING_LOGIN_URL || "").trim()) {
+    const loginStart = new Date();
+    const login = await runStageWithRetry(applicant, "login", workerProfile);
+    await prisma.automationLog
+      .create({
+        data: {
+          applicantId: applicant.id,
+          groupId: applicant.groupId,
+          stage: "login",
+          attempt: login.attempts,
+          ok: login.ok,
+          durationMs: login.durationMs,
+          note: login.note,
+          workerProfile: workerProfile ?? null,
+          startedAt: loginStart,
+          finishedAt: new Date(),
+        },
+      })
+      .catch(() => {});
+    if (!login.ok) {
+      await prisma.applicant.update({
+        where: { id: applicant.id },
+        data: {
+          status: ApplicantStatus.FAILED,
+          resultNote: `Login bo'lmadi: ${login.note}`,
+        },
+      });
+      return {
+        ok: false,
+        ref: login.ref,
+        note: `Login bo'lmadi: ${login.note}`,
+        reRegistered,
+      };
+    }
+  }
+
   const startedAt = new Date();
   const out = await runStageWithRetry(applicant, stage, workerProfile);
   const finishedAt = new Date();
@@ -315,6 +371,16 @@ async function processApplicant(
     });
     const actEnd = new Date();
 
+    // Aktivatsiya register bilan BIR XIL session (profil + IP) da ishladi.
+    // Log'da exitIp/proxySession register'niki bilan bir xil bo'lishi kerak.
+    console.log(
+      `[BOOK] activation ok=${act.ok} user=${profileKey ?? "-"} ` +
+        `status=${act.statusCode ?? "-"} ip=${act.exitIp ?? "-"} ` +
+        `proxy=${act.proxyServer ?? "off"} country=${act.proxyCountry ?? "-"} ` +
+        `session=${act.proxySession ?? "-"} ` +
+        `dur=${actEnd.getTime() - actStart.getTime()}ms`,
+    );
+
     await prisma.automationLog
       .create({
         data: {
@@ -329,6 +395,11 @@ async function processApplicant(
           finalUrl: act.link ?? null,
           visitedUrls: act.link ?? null,
           workerProfile: workerProfile ?? null,
+          proxyServer: act.proxyServer,
+          proxyCountry: act.proxyCountry,
+          proxySession: act.proxySession,
+          exitIp: act.exitIp,
+          statusCode: act.statusCode,
           startedAt: actStart,
           finishedAt: actEnd,
         },
