@@ -201,7 +201,7 @@ export default function UploadGroup({ slots = [] }: { slots?: SlotOption[] }) {
             placeholder="Slot tanlang (ixtiyoriy)"
             options={slots.map((s) => ({
               value: String(s.id),
-              label: `${s.name} · ${s.fromName} → ${s.toName}`,
+              label: s.name,
               fromIso2: s.fromIso2,
               toIso2: s.toIso2,
             }))}

@@ -487,23 +487,33 @@ export default function GroupDetail({ group }: { group: Group }) {
               <span className="text-white/60">Slotga bog'lanmagan</span>
             )}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-white/70">Guruh sanasi:</span>
-            <div className="w-[220px]">
-              <DateTimePicker value={slotOpenAt} onChange={saveSlotDate} />
-            </div>
-            {savingDate && <span className="text-white/60">saqlanmoqda…</span>}
-            {slotOpenAt && (
-              <button
-                type="button"
-                onClick={() => saveSlotDate("")}
-                className="rounded-lg bg-white/10 px-2 py-1 text-white/70 ring-1 ring-white/20 transition hover:bg-white/20"
-              >
-                Tozalash
-              </button>
-            )}
-          </div>
         </div>
+      </div>
+
+      {/* Guruh sanasi — header tashqarisida (popover kesilmasligi uchun) */}
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-soft dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
+          <Calendar size={16} variant="Bold" className="text-brand-500" />
+          Guruh sanasi
+        </div>
+        <div className="w-[230px]">
+          <DateTimePicker value={slotOpenAt} onChange={saveSlotDate} />
+        </div>
+        {savingDate && (
+          <span className="text-xs text-slate-400">saqlanmoqda…</span>
+        )}
+        {slotOpenAt && (
+          <button
+            type="button"
+            onClick={() => saveSlotDate("")}
+            className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs text-slate-500 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
+          >
+            Tozalash
+          </button>
+        )}
+        <span className="ml-auto text-xs text-slate-400">
+          Bu guruhning mo'ljal sanasi — monitoring slot darajasida ketadi
+        </span>
       </div>
 
       <p className="text-xs text-slate-400">
