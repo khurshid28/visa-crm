@@ -15,6 +15,7 @@ import {
   TickCircle,
   Profile2User,
   People,
+  Clock,
 } from "iconsax-react";
 import Select from "@/components/Select";
 import DateTimePicker from "@/components/DateTimePicker";
@@ -511,7 +512,7 @@ function SlotFormModal({
           </button>
         </div>
 
-        <div className="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
+        <div className="max-h-[80vh] space-y-4 overflow-y-auto px-6 py-5">
           <Field label="Slot nomi">
             <input
               value={name}
@@ -549,8 +550,89 @@ function SlotFormModal({
 
           <Field label="Slot vaqti (ixtiyoriy)">
             <DateTimePicker value={slotAt} onChange={setSlotAt} accent="brand" />
+            {/* Tez tanlash presetlari */}
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {[
+                { label: "+15 daq", min: 15 },
+                { label: "+30 daq", min: 30 },
+                { label: "+1 soat", min: 60 },
+                { label: "+2 soat", min: 120 },
+                { label: "+1 kun", min: 1440 },
+              ].map((p) => (
+                <button
+                  key={p.min}
+                  type="button"
+                  onClick={() => {
+                    const d = new Date(Date.now() + p.min * 60_000);
+                    const local = new Date(
+                      d.getTime() - d.getTimezoneOffset() * 60_000,
+                    );
+                    setSlotAt(local.toISOString().slice(0, 16));
+                  }}
+                  className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-brand-100 hover:text-brand-700 active:scale-95 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-brand-500/20"
+                >
+                  {p.label}
+                </button>
+              ))}
+              {slotAt && (
+                <button
+                  type="button"
+                  onClick={() => setSlotAt("")}
+                  className="rounded-lg bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-600 transition hover:bg-rose-100 active:scale-95 dark:bg-rose-500/10 dark:text-rose-300"
+                >
+                  Tozalash
+                </button>
+              )}
+            </div>
           </Field>
 
+          {/* Slot oynasi — preset tugmalari bilan */}
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-800/30">
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              <Clock size={13} /> Slot qancha vaqt ochiq turadi
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {[2, 5, 10, 15, 20, 30, 60, 120].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setWindowMinutes(m)}
+                  className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition active:scale-95 ${
+                    windowMinutes === m
+                      ? "bg-brand-600 text-white shadow-sm"
+                      : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-700"
+                  }`}
+                >
+                  {m < 60 ? `${m} daq` : `${m / 60} soat`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Register oldindan — preset tugmalari bilan */}
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-800/30">
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              <Clock size={13} /> Slotdan necha daqiqa oldin ro'yxat boshlansin
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {[0, 2, 5, 10, 15, 30].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setRegisterLeadMinutes(m)}
+                  className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition active:scale-95 ${
+                    registerLeadMinutes === m
+                      ? "bg-brand-600 text-white shadow-sm"
+                      : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-700"
+                  }`}
+                >
+                  {m === 0 ? "0 (yo'q)" : `${m} daq`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Aniq qiymatlar (xohlasangiz qo'lda kiriting) */}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Oyna (daqiqa)">
               <input
