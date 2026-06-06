@@ -68,6 +68,21 @@ export const COUNTRY_NAMES: Record<string, string> = {
   ESP: "Ispaniya",
   POL: "Polsha",
   EGY: "Misr",
+  LVA: "Latviya",
+  EST: "Estoniya",
+  LTU: "Litva",
+  CZE: "Chexiya",
+  NLD: "Niderlandiya",
+  AUT: "Avstriya",
+  GRC: "Gretsiya",
+  SWE: "Shvetsiya",
+  FIN: "Finlyandiya",
+  HUN: "Vengriya",
+  PRT: "Portugaliya",
+  BEL: "Belgiya",
+  CHE: "Shveytsariya",
+  DNK: "Daniya",
+  NOR: "Norvegiya",
 };
 
 /** ISO3 -> ISO2 (bayroq emoji uchun). Faqat ro'yxatdagi davlatlar. */
@@ -268,6 +283,48 @@ export const COUNTRIES: CountryOption[] = [
     .sort((a, b) => COUNTRY_NAMES[a].localeCompare(COUNTRY_NAMES[b], "uz"))
     .map(toOption),
 ];
+
+// Yo'nalish (slot) uchun: qayerdan (Markaziy Osiyo) — qayerga (EU/Shengen).
+const ORIGIN_PRIORITY = ["UZB", "KAZ", "KGZ", "TJK", "TKM"];
+const DEST_PRIORITY = [
+  "LVA",
+  "LTU",
+  "EST",
+  "POL",
+  "DEU",
+  "FRA",
+  "ITA",
+  "ESP",
+  "CZE",
+  "NLD",
+  "AUT",
+  "GRC",
+  "SWE",
+  "FIN",
+  "HUN",
+  "PRT",
+  "BEL",
+  "CHE",
+  "DNK",
+  "NOR",
+];
+
+/** Slot yo'nalishi uchun "qayerdan" davlatlari (Markaziy Osiyo tepada). */
+export const ORIGIN_COUNTRIES: CountryOption[] = [
+  ...ORIGIN_PRIORITY.map(toOption),
+  ...COUNTRIES.filter((c) => !ORIGIN_PRIORITY.includes(c.value)),
+];
+
+/** Slot yo'nalishi uchun "qayerga" davlatlari (EU/Shengen tepada). */
+export const DEST_COUNTRIES: CountryOption[] = [
+  ...DEST_PRIORITY.map(toOption),
+  ...COUNTRIES.filter((c) => !DEST_PRIORITY.includes(c.value)),
+];
+
+/** Davlatning o'qiladigan nomi (ISO3 koddan). */
+export function countryName(code: string): string {
+  return COUNTRY_NAMES[(code || "").toUpperCase()] ?? code;
+}
 
 // MRZ ba'zan maxsus yoki OCR xato kodlar beradi — eng yaqin ISO3 ga keltiramiz.
 const ALIASES: Record<string, string> = {

@@ -23,6 +23,11 @@ model Group {
   slotOpenAt  DateTime? // slot ochilgan/ochiladigan vaqt
   slotCloseAt DateTime? // slot yopilgan/yopiladigan vaqt
 
+  // Guruh qaysi slotga (yo'nalishga) bog'langan. Slot ochilsa shu guruh
+  // arizachilari navbatga qo'shiladi. Bog'lanmagan bo'lsa — null.
+  slotId      Int?
+  slot        Slot?        @relation(fields: [slotId], references: [id], onDelete: SetNull)
+
   // Guruh pauzada bo'lsa — slot ochilsa ham bu guruh arizachilari
   // GO (buyurtma) navbatiga qo'shilmaydi.
   paused      Boolean      @default(false)
@@ -35,6 +40,7 @@ model Group {
   statusLogs  GroupStatusLog[]
 
   @@index([status])
+  @@index([slotId])
 }
 
 // Guruh bo'yicha har bir "run" (urinish) — run-1, run-2, ...
@@ -292,6 +298,28 @@ enum ApplicantStatus {
 }
 
 // Global slot monitoring holati — butun tizimga bitta (singleton, id=1).
+// Ko'p slotli tizim — har bir slot bitta yo'nalish (qayerdan -> qayerga).
+// Guruhlar shu slotga bog'lanadi. Yaratish super-parol bilan himoyalangan.
+model Slot {
+  id                  Int       @id @default(autoincrement())
+  name                String // masalan "Latviya tongi" yoki yo'nalish nomi
+  fromCountry         String    @default("UZB") // ISO3 — qayerdan
+  toCountry           String    @default("LVA") // ISO3 — qayerga
+  slotAt              DateTime? // belgilangan slot vaqti
+  windowMinutes       Int       @default(10)
+  registerLeadMinutes Int       @default(5)
+  active              Boolean   @default(false)
+  paused              Boolean   @default(false)
+  lastCheckAt         DateTime? // oxirgi tekshiruv vaqti
+  lastMessage         String    @default("Yaratildi")
+  openedAt            DateTime? // joriy sessiyada slot ochiq topilgan vaqt
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  groups              Group[]
+
+  @@index([active])
+}
+
 // Avval uploads/slot-monitor-state.json faylida edi; endi bazada,
 // shu sababli holat va loglar bir joyda, ishonchli saqlanadi.
 model SlotMonitor {

@@ -4,6 +4,18 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DocumentUpload, TickCircle, Warning2, CloseCircle } from "iconsax-react";
 import { useToast } from "@/components/Toast";
+import Select from "@/components/Select";
+
+export type SlotOption = {
+  id: number;
+  name: string;
+  fromCountry: string;
+  toCountry: string;
+  fromName: string;
+  toName: string;
+  fromIso2: string;
+  toIso2: string;
+};
 
 const FIELD_LABEL: Record<string, string> = {
   surname: "Familiya",
@@ -28,11 +40,12 @@ type ExistingPerson = {
   groups: string[];
 };
 
-export default function UploadGroup() {
+export default function UploadGroup({ slots = [] }: { slots?: SlotOption[] }) {
   const router = useRouter();
   const { toast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
+  const [slotId, setSlotId] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -54,6 +67,7 @@ export default function UploadGroup() {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("name", name);
+      if (slotId) fd.append("slotId", slotId);
       if (confirm) {
         fd.append("confirm", "1");
         fd.append("exclude", exclude.join(","));
@@ -79,6 +93,7 @@ export default function UploadGroup() {
       setExisting(null);
       setResult(null);
       setName("");
+      setSlotId("");
       if (fileRef.current) fileRef.current.value = "";
       setOpen(false);
       const reusedPart =
@@ -169,6 +184,56 @@ export default function UploadGroup() {
           disabled={!!existing}
           className="input file:mr-3 file:rounded-md file:border-0 file:bg-brand-50 file:px-3 file:py-1 file:text-brand-700 disabled:opacity-60"
         />
+      </div>
+
+      {/* Slot (yo'nalish) tanlash — guruh shu slotga bog'lanadi */}
+      <div>
+        <label className="label">Slot (yo'nalish)</label>
+        {slots.length === 0 ? (
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-400 dark:bg-slate-800/50">
+            Hali slot yo'q — "Slotlar" bo'limidan qo'shing.
+          </p>
+        ) : (
+          <Select
+            value={slotId}
+            onChange={setSlotId}
+            disabled={!!existing}
+            placeholder="Slot tanlang (ixtiyoriy)"
+            options={slots.map((s) => ({
+              value: String(s.id),
+              label: `${s.name} · ${s.fromName} → ${s.toName}`,
+              iso2: s.toIso2,
+            }))}
+          />
+        )}
+        {slotId &&
+          (() => {
+            const s = slots.find((x) => String(x.id) === slotId);
+            if (!s) return null;
+            return (
+              <div className="mt-2 flex items-center justify-center gap-2 rounded-lg bg-slate-50 py-2 text-sm font-medium text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
+                {s.fromIso2 && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`https://flagcdn.com/${s.fromIso2}.svg`}
+                    alt=""
+                    className="h-[14px] w-[19px] rounded-sm object-cover ring-1 ring-black/5"
+                  />
+                )}
+                {s.fromName}
+                <span className="text-brand-500">→</span>
+                {s.toIso2 && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`https://flagcdn.com/${s.toIso2}.svg`}
+                    alt=""
+                    className="h-[14px] w-[19px] rounded-sm object-cover ring-1 ring-black/5"
+                  />
+                )}
+                {s.toName}
+              </div>
+            );
+          })()}
       </div>
 
       {error && (

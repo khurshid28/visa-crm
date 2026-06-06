@@ -8,11 +8,13 @@ import {
   People,
   Chart,
   DocumentText,
+  Calendar,
 } from "iconsax-react";
 
 const LINKS = [
   { href: "/dashboard", label: "Boshqaruv paneli", icon: Category },
   { href: "/groups", label: "Guruhlar", icon: Profile2User },
+  { href: "/slots", label: "Slotlar", icon: Calendar },
   { href: "/users", label: "Userlar", icon: People },
   { href: "/documents", label: "Hujjatlar", icon: DocumentText },
   { href: "/monitoring", label: "Monitoring", icon: Chart },

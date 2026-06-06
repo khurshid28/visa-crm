@@ -46,4 +46,14 @@ export function checkCredentials(username: string, password: string): boolean {
   return username === u && password === p;
 }
 
+/**
+ * Slot yaratish uchun alohida super-login/parol (admin paroldan farqli).
+ * Faqat slot ochish/qo'shish bunday himoyalanadi.
+ */
+export function checkSlotSuper(username: string, password: string): boolean {
+  const u = process.env.SLOT_SUPER_USERNAME ?? "superadmin";
+  const p = process.env.SLOT_SUPER_PASSWORD ?? "super123";
+  return username === u && password === p;
+}
+
 export const SESSION_COOKIE = COOKIE_NAME;

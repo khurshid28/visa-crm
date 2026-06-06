@@ -27,6 +27,9 @@ export async function POST(req: NextRequest) {
   const form = await req.formData();
   const file = form.get("file");
   const name = String(form.get("name") ?? "").trim();
+  const slotIdRaw = String(form.get("slotId") ?? "").trim();
+  const slotId =
+    slotIdRaw && /^\d+$/.test(slotIdRaw) ? Number(slotIdRaw) : null;
   const confirm = String(form.get("confirm") ?? "") === "1";
   const excludeRaw = String(form.get("exclude") ?? "");
   const excludeSet = new Set(
@@ -110,6 +113,7 @@ export async function POST(req: NextRequest) {
     data: {
       name: name || file.name.replace(/\.[^.]+$/, ""),
       fileName: file.name,
+      ...(slotId ? { slotId } : {}),
       applicants: {
         create: toCreate.map((a) => ({
           surname: a.surname,
