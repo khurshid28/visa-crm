@@ -288,6 +288,186 @@ function Countdown({ slot }: { slot: SlotView }) {
   );
 }
 
+// Qisqa vaqt formati: "14:05" yoki "11 Iyun, 14:05".
+function fmtClock(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+// Slotning vaqt oynalarini (register, tekshiruv, oxiri) hisoblaydi.
+function slotWindows(slot: SlotView) {
+  if (!slot.slotAt) return null;
+  const target = new Date(slot.slotAt).getTime();
+  const windowMs = slot.windowMinutes * 60_000;
+  const leadMs = slot.registerLeadMinutes * 60_000;
+  return {
+    target,
+    leadStart: target - windowMs - leadMs, // register boshlanadi
+    checkStart: target - windowMs, // tekshiruv boshlanadi
+    end: target + windowMs, // oyna tugaydi
+  };
+}
+
+type LivePhaseKey = "idle" | "wait" | "register" | "check" | "open" | "done";
+
+const PHASE_STEPS: { key: LivePhaseKey; label: string }[] = [
+  { key: "wait", label: "Kutish" },
+  { key: "register", label: "Register" },
+  { key: "check", label: "Tekshiruv" },
+  { key: "open", label: "Natija" },
+];
+
+// Jonli faza paneli — vaqtlar, progress va konfiglarni ko'rsatadi.
+function MonitorPanel({ slot }: { slot: SlotView }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const w = slotWindows(slot);
+
+  // Joriy fazani aniqlaymiz.
+  let phase: LivePhaseKey = "idle";
+  if (slot.openedAt) phase = "open";
+  else if ((slot.lastMessage || "").toLowerCase().includes("tugadi"))
+    phase = "done";
+  else if (w && slot.active && !slot.paused) {
+    if (now < w.leadStart) phase = "wait";
+    else if (now < w.checkStart) phase = "register";
+    else if (now <= w.end) phase = "check";
+    else phase = "done";
+  } else if (w) {
+    if (now < w.leadStart) phase = "wait";
+    else if (now < w.checkStart) phase = "register";
+    else if (now <= w.end) phase = "check";
+  }
+
+  const activeIdx = PHASE_STEPS.findIndex((s) => s.key === phase);
+
+  return (
+    <div className="space-y-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+      {/* Faza chizig'i */}
+      {w && (
+        <div className="flex items-center gap-1">
+          {PHASE_STEPS.map((step, i) => {
+            const done = activeIdx >= 0 && i < activeIdx;
+            const current = i === activeIdx;
+            return (
+              <div key={step.key} className="flex-1">
+                <div
+                  className={`h-1.5 rounded-full transition ${
+                    current
+                      ? phase === "open"
+                        ? "bg-emerald-500"
+                        : phase === "done"
+                          ? "bg-rose-400"
+                          : "animate-pulse bg-brand-500"
+                      : done
+                        ? "bg-brand-300"
+                        : "bg-slate-200 dark:bg-slate-700"
+                  }`}
+                />
+                <p
+                  className={`mt-1 text-center text-[9px] font-medium uppercase tracking-wide ${
+                    current
+                      ? "text-brand-600 dark:text-brand-300"
+                      : "text-slate-400"
+                  }`}
+                >
+                  {step.label}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Vaqtlar jadvali */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px]">
+        <TimeRow label="Slot vaqti" value={fmtDateTime(slot.slotAt)} strong />
+        <TimeRow
+          label="Register boshlanishi"
+          value={w ? fmtClock(new Date(w.leadStart).toISOString()) : "—"}
+        />
+        <TimeRow
+          label="Tekshiruv boshlanishi"
+          value={w ? fmtClock(new Date(w.checkStart).toISOString()) : "—"}
+        />
+        <TimeRow
+          label="Oyna tugaydi"
+          value={w ? fmtClock(new Date(w.end).toISOString()) : "—"}
+        />
+        <TimeRow label="Oxirgi tekshiruv" value={fmtClock(slot.lastCheckAt)} />
+        <TimeRow
+          label="Ochilgan"
+          value={slot.openedAt ? fmtDateTime(slot.openedAt) : "—"}
+          highlight={!!slot.openedAt}
+        />
+      </div>
+
+      {/* Konfiglar + ta'sir */}
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-200/70 pt-2 dark:border-slate-700/70">
+        <Chip>{slot.windowMinutes} daq oyna</Chip>
+        <Chip>{slot.registerLeadMinutes} daq oldin register</Chip>
+        <Chip accent>{slot.groupsCount} guruh</Chip>
+        <Chip accent>{slot.applicantsCount} ariza ta'sir</Chip>
+      </div>
+    </div>
+  );
+}
+
+function TimeRow({
+  label,
+  value,
+  strong = false,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-slate-400">{label}</span>
+      <span
+        className={`tabular-nums ${
+          highlight
+            ? "font-semibold text-emerald-600"
+            : strong
+              ? "font-semibold text-slate-700 dark:text-slate-200"
+              : "text-slate-600 dark:text-slate-300"
+        }`}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function Chip({
+  children,
+  accent = false,
+}: {
+  children: React.ReactNode;
+  accent?: boolean;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+        accent
+          ? "bg-brand-100 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300"
+          : "bg-slate-200/70 text-slate-600 dark:bg-slate-700/70 dark:text-slate-300"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
 
 function SlotCard({
   slot,
@@ -354,14 +534,20 @@ function SlotCard({
 
       <Countdown slot={slot} />
 
+      {/* Jonli monitoring paneli — fazalar, vaqtlar, konfiglar, ta'sir */}
+      <MonitorPanel slot={slot} />
+
       {/* Oxirgi holat xabari */}
       <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
         {slot.lastMessage}
       </p>
 
-      {/* Voqealar tarixi — ochildi/yopildi/tugadi */}
+      {/* Voqealar tarixi — nima o'zgardi (ochildi/yopildi/tugadi/sozlandi) */}
       {slot.events.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1.5 rounded-xl border border-slate-100 p-2.5 dark:border-slate-800">
+          <p className="px-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Nima o'zgardi
+          </p>
           {slot.events.map((e) => {
             const meta = EVENT_META[e.type] ?? {
               label: e.type,
@@ -372,16 +558,18 @@ function SlotCard({
                 key={e.id}
                 className="flex items-center gap-2 text-[11px] text-slate-400"
               >
-                <TickCircle
-                  size={12}
-                  variant="Bold"
-                  className={meta.cls}
-                />
+                <TickCircle size={12} variant="Bold" className={meta.cls} />
                 <span className={`font-semibold ${meta.cls}`}>
                   {meta.label}
                 </span>
                 {e.usersQueued > 0 && (
-                  <span>· {e.usersQueued} user</span>
+                  <span className="rounded bg-brand-50 px-1 text-brand-600 dark:bg-brand-500/10">
+                    {e.usersQueued} user
+                  </span>
+                )}
+                {e.groupsCount > 0 && <span>· {e.groupsCount} guruh</span>}
+                {e.durationSec != null && (
+                  <span>· {Math.round(e.durationSec / 60)} daq</span>
                 )}
                 <span className="ml-auto tabular-nums">
                   {fmtDateTime(e.createdAt)}
