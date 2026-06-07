@@ -437,48 +437,77 @@ export async function acceptCookies(
 }
 
 /**
- * Turnstile checkbox'i interaktiv bo'lsa — uning ustiga (iframe markaziga)
- * inson kabi tasodifiy nuqtalarda bir necha marta bosadi. Token avtomatik
- * to'lmagan holatlar uchun. Hech qachon throw qilmaydi.
+ * Turnstile checkbox'i interaktiv ("Verify you are human") bo'lsa — uni bosadi.
+ * 1) Avval iframe ICHIDAGI checkbox'ni to'g'ridan-to'g'ri bosishga urinamiz
+ *    (Playwright frameLocator — eng ishonchli).
+ * 2) Bo'lmasa — koordinata bo'yicha (iframe chap qismi) inson kabi bosamiz.
+ * Har bosishdan keyin token kelishini uzoqroq kutamiz. Hech qachon throw qilmaydi.
  */
 export async function clickTurnstile(
   page: import("playwright").Page,
 ): Promise<boolean> {
+  const hasToken = () =>
+    page
+      .evaluate(() => {
+        const el = document.querySelector(
+          'input[name="cf-turnstile-response"]',
+        ) as HTMLInputElement | null;
+        return !!el && !!el.value && el.value.length > 30;
+      })
+      .catch(() => false);
+
   try {
+    const iframeSel =
+      'iframe[src*="challenges.cloudflare.com"], .cf-turnstile iframe, #widgetId iframe';
     const frameEl = await page
-      .waitForSelector(
-        'iframe[src*="challenges.cloudflare.com"], .cf-turnstile iframe, #widgetId iframe',
-        { state: "visible", timeout: 4000 },
-      )
+      .waitForSelector(iframeSel, { state: "visible", timeout: 6000 })
       .catch(() => null);
     if (!frameEl) return false;
 
+    // --- 1-usul: iframe ichidagi checkbox'ni frameLocator bilan bosamiz ---
+    try {
+      const fl = page.frameLocator(iframeSel).first();
+      const candidates = [
+        fl.locator('input[type="checkbox"]'),
+        fl.getByLabel(/verify you are human|i am human|human/i),
+        fl.locator("label"),
+        fl.locator("body"),
+      ];
+      for (const c of candidates) {
+        if ((await c.count().catch(() => 0)) > 0) {
+          await c
+            .first()
+            .click({ timeout: 4000, force: true })
+            .catch(() => {});
+          // Token kelishini kutamiz (3-8s bo'lishi mumkin).
+          for (let w = 0; w < 16; w++) {
+            await page.waitForTimeout(500).catch(() => {});
+            if (await hasToken()) return true;
+          }
+        }
+      }
+    } catch {
+      /* frameLocator ishlamadi — koordinataga o'tamiz */
+    }
+
+    // --- 2-usul: koordinata bo'yicha (iframe chap qismidagi checkbox) ---
     const box = await frameEl.boundingBox().catch(() => null);
     if (!box) return false;
-
-    // Checkbox odatda iframe'ning chap qismida. Tasodifiy 2-3 nuqtaga bosamiz.
     const tries = rand(2, 4);
     for (let i = 0; i < tries; i++) {
-      const x = box.x + rand(18, Math.max(20, Math.floor(box.width * 0.28)));
-      const y = box.y + box.height / 2 + rand(-6, 6);
-      // Avval kursorni inson kabi olib boramiz.
+      // Checkbox odatda chap chetda (~30px). Tor diapazonda aniqroq bosamiz.
+      const x = box.x + rand(24, 44);
+      const y = box.y + box.height / 2 + rand(-4, 4);
       await page.mouse.move(x - rand(20, 60), y - rand(10, 30)).catch(() => {});
       await page.waitForTimeout(rand(120, 320)).catch(() => {});
       await page.mouse.move(x, y).catch(() => {});
       await page.waitForTimeout(rand(80, 200)).catch(() => {});
       await page.mouse.click(x, y).catch(() => {});
-      await page.waitForTimeout(rand(500, 1100)).catch(() => {});
-
-      // Token to'ldimi? To'lgan bo'lsa to'xtaymiz.
-      const ok = await page
-        .evaluate(() => {
-          const el = document.querySelector(
-            'input[name="cf-turnstile-response"]',
-          ) as HTMLInputElement | null;
-          return !!el && !!el.value && el.value.length > 30;
-        })
-        .catch(() => false);
-      if (ok) return true;
+      // Token kelishini uzoqroq kutamiz.
+      for (let w = 0; w < 12; w++) {
+        await page.waitForTimeout(500).catch(() => {});
+        if (await hasToken()) return true;
+      }
     }
     return false;
   } catch {

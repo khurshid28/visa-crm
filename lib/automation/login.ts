@@ -92,6 +92,11 @@ export async function loginToBooking(
     // bekorga davom etmaymiz — aniq xato qaytaramiz).
     let lastGotoError = false;
     let pageOpened = false;
+    // DIAGNOSTIKA: har so'rov vaqti (.env: BOOKING_TIMING=true) — loop tashqarisida
+    // yig'amiz, natija qismida eng sekinlarni chop etamiz.
+    const timingOn =
+      (process.env.BOOKING_TIMING || "").toLowerCase() === "true";
+    const timings: { url: string; ms: number; type: string }[] = [];
 
     for (let attempt = 0; attempt < maxIpRetries; attempt++) {
       // Avvalgi (bloklangan) sessiyani yopamiz.
@@ -124,6 +129,25 @@ export async function loginToBooking(
           pageErrors.push(`HTTP ${s}: ${res.url().slice(0, 80)}`.slice(0, 200));
         }
       });
+
+      // DIAGNOSTIKA: har so'rov qancha ms ketganini o'lchaymiz (.env: BOOKING_TIMING=true).
+      // Eng sekin so'rovlarni aniqlash uchun — qaysi joy sekin ekanini ko'rsatadi.
+      const reqStart = new Map<string, number>();
+      if (timingOn && attempt === 0) {
+        p.on("request", (req: import("playwright").Request) => {
+          reqStart.set(req.url(), Date.now());
+        });
+        p.on("requestfinished", (req: import("playwright").Request) => {
+          const t0 = reqStart.get(req.url());
+          if (t0 != null) {
+            timings.push({
+              url: req.url(),
+              ms: Date.now() - t0,
+              type: req.resourceType(),
+            });
+          }
+        });
+      }
       // Token'ni login/auth XHR javobidan tutib olamiz.
       p.on("response", (res: import("playwright").Response) => {
         if (capturedToken) return;
@@ -400,6 +424,26 @@ export async function loginToBooking(
     // Login bo'lmasa — sahifa holatini saqlaymiz (VFS xato xabarini ko'rish uchun).
     if (!base.ok) {
       await dumpDebug(page, "login-result").catch(() => {});
+    }
+
+    // DIAGNOSTIKA: eng sekin so'rovlar (qaysi joy optimizatsiya kerakligini ko'rsatadi).
+    if (timingOn && timings.length) {
+      const top = [...timings].sort((a, b) => b.ms - a.ms).slice(0, 15);
+      const total = timings.reduce((s, t) => s + t.ms, 0);
+      step(
+        `Jami ${timings.length} so'rov, eng sekin ${top.length} ta (qfm: ${Math.round(total / timings.length)}ms):`,
+      );
+      for (const t of top) {
+        const host = (() => {
+          try {
+            return new URL(t.url).host;
+          } catch {
+            return t.url.slice(0, 40);
+          }
+        })();
+        const tail = t.url.split("/").pop()?.slice(0, 32) || "";
+        step(`  ${String(t.ms).padStart(6)}ms  ${t.type.padEnd(8)} ${host} ${tail}`);
+      }
     }
 
     if (closeSession) await closeSession();
