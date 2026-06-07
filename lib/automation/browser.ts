@@ -558,6 +558,12 @@ async function connectRealChrome(opts?: {
     "--no-default-browser-check",
     "--restore-last-session=false",
     "--disable-session-crashed-bubble",
+    // TEZLIK: Angular JS bajarilishini tezlashtiradi — oyna fonda/fokussiz
+    // bo'lsa ham timer/renderer sekinlashmaydi (bot-belgisi EMAS).
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-ipc-flooding-protection",
     ...(localProxyUrl ? [`--proxy-server=${localProxyUrl}`] : []),
     "about:blank",
   ];

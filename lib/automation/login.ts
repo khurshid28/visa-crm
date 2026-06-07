@@ -226,6 +226,13 @@ export async function loginToBooking(
     await page
       .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
       .catch(() => {});
+
+    // TEZLIK: Cloudflare Turnstile token sahifa yuklanishi bilan FONda yechila
+    // boshlaydi. Shuning uchun captcha kutishni SHU YERDA (email/parol to'ldirish
+    // bilan PARALLEL) ishga tushiramiz — token email/parol yozilayotganda tayyor
+    // bo'ladi va keyin qo'shimcha kutish ~0 bo'ladi.
+    const captchaPromise = waitForTurnstile(page);
+
     const emailEl = page.locator(emailSel).first();
     if ((await emailEl.count()) > 0) {
       const ok = await fillFieldReliably(page, emailEl, email);
@@ -250,9 +257,10 @@ export async function loginToBooking(
     }
     await humanPause();
 
-    // Cloudflare Turnstile — token to'lguncha kutamiz.
+    // Cloudflare Turnstile — email/parol bilan PARALLEL boshlangan kutishни
+    // shu yerda yig'amiz (ko'pincha token allaqachon tayyor — qo'shimcha kutish ~0).
     step("Cloudflare Turnstile tekshirilmoqda...");
-    let captcha = await waitForTurnstile(page);
+    let captcha = await captchaPromise;
     base.captchaPresent = captcha.present;
     base.captchaSolved = captcha.solved;
 
