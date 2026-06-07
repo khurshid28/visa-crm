@@ -11,6 +11,7 @@ import {
 } from "iconsax-react";
 import { prisma } from "@/lib/prisma";
 import { APPLICANT_STATUS } from "@/lib/status";
+import { countryFlag, countryFlagUrl, countryName } from "@/lib/options";
 import {
   StatusDonut,
   GroupBars,
@@ -129,6 +130,117 @@ export default async function DashboardPage({
     .slice(0, 6)
     .map((g) => ({ label: g.name, value: g._count.applicants }));
 
+  // ---- Yo'nalish (slot) bo'yicha kesim ----
+  const [slots, applicantsByGroup] = await Promise.all([
+    prisma.slot.findMany({
+      select: { id: true, name: true, fromCountry: true, toCountry: true },
+    }),
+    prisma.applicant.groupBy({
+      by: ["groupId", "status"],
+      _count: true,
+    }),
+  ]);
+  const groupsForBreakdown = await prisma.group.findMany({
+    select: { id: true, name: true, slotId: true },
+  });
+  const groupSlot = new Map<number, number | null>(
+    groupsForBreakdown.map((g) => [g.id, g.slotId]),
+  );
+  const groupName = new Map<number, string>(
+    groupsForBreakdown.map((g) => [g.id, g.name]),
+  );
+
+  // Guruh bo'yicha jami/band/xato.
+  const groupAgg = new Map<
+    number,
+    { total: number; booked: number; failed: number }
+  >();
+  // Slot bo'yicha jami/band.
+  const slotAgg = new Map<number, { total: number; booked: number }>();
+  for (const r of applicantsByGroup) {
+    const gm =
+      groupAgg.get(r.groupId) ?? { total: 0, booked: 0, failed: 0 };
+    gm.total += r._count;
+    if (r.status === "BOOKED") gm.booked += r._count;
+    if (r.status === "FAILED") gm.failed += r._count;
+    groupAgg.set(r.groupId, gm);
+
+    const sId = groupSlot.get(r.groupId);
+    if (sId != null) {
+      const sm = slotAgg.get(sId) ?? { total: 0, booked: 0 };
+      sm.total += r._count;
+      if (r.status === "BOOKED") sm.booked += r._count;
+      slotAgg.set(sId, sm);
+    }
+  }
+
+  const slotBreakdown = slots
+    .map((s) => {
+      const m = slotAgg.get(s.id) ?? { total: 0, booked: 0 };
+      return {
+        id: s.id,
+        name: s.name,
+        fromCountry: s.fromCountry,
+        toCountry: s.toCountry,
+        total: m.total,
+        booked: m.booked,
+        successRate: m.total ? Math.round((m.booked / m.total) * 100) : 0,
+      };
+    })
+    .filter((s) => s.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  const slotBars = slotBreakdown.map((s) => ({
+    label: `${countryFlag(s.fromCountry)} → ${countryFlag(s.toCountry)}`,
+    value: s.total,
+  }));
+
+  // Guruh bo'yicha breakdown (top guruhlar).
+  const groupBreakdown = Array.from(groupAgg.entries())
+    .map(([gid, m]) => ({
+      id: gid,
+      name: groupName.get(gid) ?? `#${gid}`,
+      total: m.total,
+      booked: m.booked,
+      failed: m.failed,
+      successRate: m.total ? Math.round((m.booked / m.total) * 100) : 0,
+    }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 8);
+
+  // ---- Oylar bo'yicha kesim (so'nggi 12 oy) ----
+  const monthStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  const monthApplicants = await prisma.applicant.findMany({
+    where: { createdAt: { gte: monthStart } },
+    select: { createdAt: true, status: true },
+  });
+  const MONTH_NAMES = [
+    "Yan", "Fev", "Mar", "Apr", "May", "Iyn",
+    "Iyl", "Avg", "Sen", "Okt", "Noy", "Dek",
+  ];
+  const months: { key: string; label: string; total: number; booked: number }[] =
+    [];
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1);
+    months.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      label: MONTH_NAMES[d.getMonth()],
+      total: 0,
+      booked: 0,
+    });
+  }
+  const monthIdx = new Map(months.map((m, i) => [m.key, i]));
+  for (const a of monthApplicants) {
+    const key = `${a.createdAt.getFullYear()}-${String(a.createdAt.getMonth() + 1).padStart(2, "0")}`;
+    const idx = monthIdx.get(key);
+    if (idx === undefined) continue;
+    months[idx].total++;
+    if (a.status === "BOOKED") months[idx].booked++;
+  }
+  const monthLabels = months.map((m) => m.label);
+  const monthTotals = months.map((m) => m.total);
+  const monthBooked = months.map((m) => m.booked);
+
   // Konversiya voronkasi: Jami -> To'liq -> Ro'yxatdan o'tgan -> Buyurtma -> Band.
   const cnt = (st: string) =>
     byStatus.find((s) => s.status === st)?._count ?? 0;
@@ -243,6 +355,151 @@ export default async function DashboardPage({
           <GroupBars data={barData} />
         </div>
       </div>
+
+      {/* Oylar bo'yicha — so'nggi 12 oy */}
+      <div className="card">
+        <h2 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-200">
+          Oylar bo'yicha — so'nggi 12 oy
+        </h2>
+        <p className="mb-4 text-xs text-slate-400">
+          Yangi arizachilar va band qilinganlar (oylik)
+        </p>
+        <LineChart
+          labels={monthLabels}
+          series={[
+            { label: "Yangi", color: "#6366f1", points: monthTotals },
+            { label: "Band", color: "#10b981", points: monthBooked },
+          ]}
+        />
+      </div>
+
+      {/* Yo'nalish (slot) + Guruh bo'yicha kesim */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="card">
+          <h2 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            Yo'nalishlar bo'yicha
+          </h2>
+          <p className="mb-4 text-xs text-slate-400">
+            Har bir slot (yo'nalish) bo'yicha arizachilar va muvaffaqiyat
+          </p>
+          {slotBreakdown.length === 0 ? (
+            <p className="py-3 text-sm text-slate-400">
+              Hali yo'nalishga bog'langan arizachi yo'q
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {slotBreakdown.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center gap-3 rounded-xl border border-slate-100 p-3 dark:border-slate-800"
+                >
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {countryFlagUrl(s.fromCountry) && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={countryFlagUrl(s.fromCountry)}
+                        alt={s.fromCountry}
+                        className="h-4 w-6 rounded-sm object-cover ring-1 ring-slate-200"
+                      />
+                    )}
+                    <ArrowRight2 size={12} className="text-slate-300" />
+                    {countryFlagUrl(s.toCountry) && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={countryFlagUrl(s.toCountry)}
+                        alt={s.toCountry}
+                        className="h-4 w-6 rounded-sm object-cover ring-1 ring-slate-200"
+                      />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {countryName(s.fromCountry)} → {countryName(s.toCountry)}
+                    </p>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600"
+                        style={{ width: `${s.successRate}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                      {s.total}
+                    </p>
+                    <p className="text-[11px] text-emerald-600">
+                      {s.booked} band · {s.successRate}%
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <h2 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            Guruhlar bo'yicha natija
+          </h2>
+          <p className="mb-4 text-xs text-slate-400">
+            Top guruhlar: jami / band / xato
+          </p>
+          {groupBreakdown.length === 0 ? (
+            <p className="py-3 text-sm text-slate-400">Hali guruh yo'q</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-left text-xs text-slate-400 dark:border-slate-800">
+                    <th className="py-2 pr-3">Guruh</th>
+                    <th className="py-2 pr-3">Jami</th>
+                    <th className="py-2 pr-3">Band</th>
+                    <th className="py-2 pr-3">Xato</th>
+                    <th className="py-2 pr-3">%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupBreakdown.map((g) => (
+                    <tr
+                      key={g.id}
+                      className="border-b border-slate-50 dark:border-slate-800/60"
+                    >
+                      <td className="py-2 pr-3">
+                        <Link
+                          href={`/groups/${g.id}`}
+                          className="font-medium text-slate-700 hover:text-brand-600 dark:text-slate-200"
+                        >
+                          {g.name}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-3 text-slate-600 dark:text-slate-300">
+                        {g.total}
+                      </td>
+                      <td className="py-2 pr-3 text-emerald-600">{g.booked}</td>
+                      <td className="py-2 pr-3 text-rose-600">{g.failed}</td>
+                      <td className="py-2 pr-3">
+                        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                          {g.successRate}%
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Yo'nalish ulushi (bar) */}
+      {slotBars.length > 0 && (
+        <div className="card">
+          <h2 className="mb-5 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            Yo'nalishlar ulushi
+          </h2>
+          <GroupBars data={slotBars} />
+        </div>
+      )}
 
       <div className="card">
         <div className="mb-4 flex items-center justify-between">

@@ -148,21 +148,25 @@ export async function loginToBooking(
       // Warmup: avval asosiy sahifani ochamiz (region cookie/sessiya o'rnatadi
       // va Cloudflare'ni yengilroq sahifada o'taymiz). .env: BOOKING_WARMUP_URL.
       const warmupUrl = (process.env.BOOKING_WARMUP_URL || "").trim();
-      if (warmupUrl) {
+      // Warmup faqat BIRINCHI urinishda (retry'larda takrorlash vaqt/trafik isrofi).
+      if (warmupUrl && attempt === 0) {
         step("Asosiy sahifa (warmup) ochilmoqda...");
         await p
-          .goto(warmupUrl, { waitUntil: "domcontentloaded", timeout: 45000 })
+          .goto(warmupUrl, { waitUntil: "commit", timeout: 45000 })
           .catch(() => {});
         await waitForCloudflareClear(p, step);
         // Cookie banner chiqsa — qabul qilamiz.
         if (await acceptCookies(p)) step("Cookie qabul qilindi");
-        await humanPause(800, 1600);
+        await humanPause(400, 800);
         step("Warmup tugadi, login sahifasiga o'tilmoqda...");
       }
 
       step("Login sahifasi ochilmoqda...");
       // Proxy tuneli uzilishi mumkin (ERR_TUNNEL_CONNECTION_FAILED) — buni
       // ham "blok" deb hisoblab yangi IP bilan qayta urinamiz.
+      // TEZLIK: "domcontentloaded" — Angular bundle yuklanadi (email inputni
+      // render qilish uchun shart), LEKIN "networkidle" (barcha so'rovlar
+      // tinishini, ~10s) KUTMAYMIZ. Email maydoni pastda waitForSelector bilan.
       let gotoError = false;
       let response: import("playwright").Response | null = null;
       try {
@@ -176,9 +180,6 @@ export async function loginToBooking(
         pageErrors.push(`goto: ${m}`.slice(0, 200));
       }
       base.statusCode = response ? response.status() : null;
-      await p
-        .waitForLoadState("networkidle", { timeout: 10000 })
-        .catch(() => {});
       step(
         gotoError
           ? "Sahifa ochilmadi (proxy/ulanish xatosi)"
@@ -303,10 +304,9 @@ export async function loginToBooking(
         timeout: 20000,
       })
       .catch(() => {});
-    await page
-      .waitForLoadState("networkidle", { timeout: 10000 })
-      .catch(() => {});
-    await page.waitForTimeout(1500).catch(() => {});
+    // URL o'zgargach qisqa kutish — dashboard DOM/token o'rnashishi uchun
+    // (networkidle butun sahifa yuklanishini kutadi, bizga shart emas).
+    await page.waitForTimeout(1200).catch(() => {});
 
     base.finalUrl = page.url();
     const bodyText = (

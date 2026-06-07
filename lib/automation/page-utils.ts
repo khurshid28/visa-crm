@@ -539,12 +539,33 @@ export async function waitForCloudflareClear(
 
 /**
  * Cloudflare Turnstile captcha'ni aniqlaydi va token to'lguncha kutadi.
+ * Widget kech render bo'lishi mumkin (Angular SPA) — shu sababli avval
+ * widget PAYDO BO'LISHINI biroz kutamiz, keyin token kutamiz.
  */
 export async function waitForTurnstile(
   page: import("playwright").Page,
 ): Promise<{ present: boolean; solved: boolean }> {
   const timeoutMs = Number(process.env.BOOKING_CAPTCHA_TIMEOUT_MS || "30000");
+  // Widget paydo bo'lishini kutish vaqti (sahifa to'liq yuklanishini kutmaymiz,
+  // shuning uchun Turnstile kech render bo'lishi mumkin).
+  const appearMs = Number(process.env.BOOKING_CAPTCHA_APPEAR_MS || "12000");
   try {
+    // Widget paydo bo'lishini kutamiz (iframe / hidden input / .cf-turnstile).
+    await page
+      .waitForFunction(
+        () => {
+          const hasInput = !!document.querySelector(
+            'input[name="cf-turnstile-response"], [id^="cf-chl-widget"]',
+          );
+          const hasWidget = !!document.querySelector(
+            '.cf-turnstile, iframe[src*="challenges.cloudflare.com"]',
+          );
+          return hasInput || hasWidget;
+        },
+        { timeout: appearMs },
+      )
+      .catch(() => {});
+
     // Widget bormi? (iframe yoki hidden input yoki .cf-turnstile konteyner)
     const present = await page
       .evaluate(() => {
