@@ -119,6 +119,73 @@ async function humanPause(min = 120, max = 380): Promise<void> {
   await new Promise((r) => setTimeout(r, rand(min, max)));
 }
 
+// Proxy trafigini TEJASH: og'ir resurslarni (rasm, shrift, video, audio) va
+// keraksiz analytics/tracker domenlarini bloklaydi. Cloudflare/Turnstile va
+// VFS uchun zarur skript/CSS/XHR'lar O'TKAZILADI (aks holda captcha buziladi).
+// .env: BOOKING_BLOCK_RESOURCES=false bo'lsa o'chadi (default: yoqilgan).
+const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font"]);
+const BLOCKED_URL_PATTERNS = [
+  "google-analytics.com",
+  "googletagmanager.com",
+  "doubleclick.net",
+  "facebook.net",
+  "facebook.com/tr",
+  "hotjar.com",
+  "clarity.ms",
+  "bat.bing.com",
+  "yandex.ru/metrika",
+  "mc.yandex",
+  "fonts.gstatic.com",
+  "fonts.googleapis.com",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".mp4",
+  ".webm",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".svg",
+  ".ico",
+];
+async function applyResourceBlocking(
+  context: import("playwright").BrowserContext,
+): Promise<void> {
+  if ((process.env.BOOKING_BLOCK_RESOURCES || "").toLowerCase() === "false") {
+    return;
+  }
+  await context.route("**/*", (route) => {
+    try {
+      const req = route.request();
+      const type = req.resourceType();
+      const url = req.url().toLowerCase();
+      // Cloudflare/Turnstile resurslarini HECH QACHON bloklamaymiz.
+      if (
+        url.includes("challenges.cloudflare.com") ||
+        url.includes("/cdn-cgi/")
+      ) {
+        return route.continue();
+      }
+      if (
+        BLOCKED_RESOURCE_TYPES.has(type) ||
+        BLOCKED_URL_PATTERNS.some((p) => url.includes(p))
+      ) {
+        return route.abort();
+      }
+      return route.continue();
+    } catch {
+      try {
+        return route.continue();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+}
+
 // Brauzerga ochilishi bilan qo'shimcha "inson" belgilarini in'ektsiya qiladi
 // (stealth ustiga: webdriver=false, languages, chrome obyekt, permissions).
 async function applyStealthInit(
@@ -921,6 +988,8 @@ export async function loginToBooking(
         { profileKey, ipAttempt: attempt },
       );
       closeSession = session.close;
+      // Proxy trafigini tejash: og'ir resurslarni bloklaymiz.
+      await applyResourceBlocking(session.context);
       step(
         attempt === 0
           ? "Brauzer ochildi (stealth + proxy)"
@@ -1077,6 +1146,9 @@ export async function loginToBooking(
 
     await humanPause(400, 900);
 
+    // Cookie banneri Sign In tugmasini to'sib qo'yishi mumkin — yana yopamiz.
+    if (await acceptCookies(page)) step("Cookie qabul qilindi");
+
     // "Sign In" tugmasini bosamiz.
     const signInBtn = page
       .locator(
@@ -1091,10 +1163,15 @@ export async function loginToBooking(
       step("Sign In tugmasi topilmadi!");
     }
 
-    // Login natijasini kutamiz (navigatsiya yoki xato xabari).
+    // Login natijasini kutamiz: dashboard'ga o'tishni (URL o'zgarishi) kutamiz.
     step("Natija kutilmoqda...");
     await page
-      .waitForLoadState("networkidle", { timeout: 15000 })
+      .waitForURL((u) => !/\/login(\b|\/|$)/i.test(u.toString()), {
+        timeout: 20000,
+      })
+      .catch(() => {});
+    await page
+      .waitForLoadState("networkidle", { timeout: 10000 })
       .catch(() => {});
     await page.waitForTimeout(1500).catch(() => {});
 
