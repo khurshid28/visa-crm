@@ -110,11 +110,13 @@ export async function applyResourceBlocking(
   const cmsCacheOn =
     !blockCms &&
     (process.env.BOOKING_CMS_CACHE || "true").toLowerCase() !== "false";
-  const cmsCacheDir = path.join(
-    os.tmpdir(),
-    "visa-cms-cache",
-  );
-  if (cmsCacheOn) {
+  // Statik asset (versiyali JS/CSS: vendor.js?v=8.0, styles.css?v=8...) — bular
+  // ham o'zgarmaydi (versiya URL'da). Disk cache qilamiz — fresh profilda ham
+  // proxy orqali qayta yuklanmaydi. .env: BOOKING_ASSET_CACHE=false o'chiradi.
+  const assetCacheOn =
+    (process.env.BOOKING_ASSET_CACHE || "true").toLowerCase() !== "false";
+  const cmsCacheDir = path.join(os.tmpdir(), "visa-cms-cache");
+  if (cmsCacheOn || assetCacheOn) {
     try {
       fs.mkdirSync(cmsCacheDir, { recursive: true });
     } catch {
@@ -123,10 +125,16 @@ export async function applyResourceBlocking(
   }
   const isCms = (url: string) =>
     url.includes("cloudfront.net") && url.includes("entries");
+  // Versiyali statik asset (liftassets.../*.js?v=, *.css?v=). Login-zarur
+  // skriptlar (main/vendor/runtime/polyfills/scripts/styles) — o'zgarmaydi.
+  const isStaticAsset = (url: string) =>
+    url.includes("liftassets.vfsglobal.com") &&
+    /\.(js|css)(\?|$)/.test(url) &&
+    /(main|vendor|runtime|polyfills|scripts|styles)\./.test(url);
   const cmsKey = (url: string) => {
     let h = 0;
     for (let i = 0; i < url.length; i++) h = (h * 31 + url.charCodeAt(i)) >>> 0;
-    return `cms-${h.toString(36)}.json`;
+    return `cache-${h.toString(36)}.json`;
   };
 
   await context.route("**/*", async (route) => {
@@ -151,8 +159,12 @@ export async function applyResourceBlocking(
         return route.abort();
       }
 
-      // CMS DISK CACHE: statik CMS javoblarini diskdan beramiz (proxy'siz).
-      if (cmsCacheOn && isCms(url) && req.method() === "GET") {
+      // DISK CACHE: statik CMS javoblari VA versiyali JS/CSS asset'larini
+      // diskdan beramiz (proxy'siz). Ikkalasi ham o'zgarmaydi (statik/versiyali).
+      const cacheable =
+        req.method() === "GET" &&
+        ((cmsCacheOn && isCms(url)) || (assetCacheOn && isStaticAsset(url)));
+      if (cacheable) {
         const file = path.join(cmsCacheDir, cmsKey(url));
         // Cache'da bor — diskdan beramiz (proxy orqali ketmaydi).
         try {
