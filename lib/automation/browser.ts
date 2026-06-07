@@ -102,7 +102,34 @@ export async function applyResourceBlocking(
   // (xavfli — sahifa buzilishi mumkin).
   const blockCms =
     (process.env.BOOKING_BLOCK_CMS || "false").toLowerCase() === "true";
-  await context.route("**/*", (route) => {
+
+  // CMS DISK CACHE: CMS javoblari STATIK matn (o'zgarmaydi). Birinchi marta
+  // proxy orqali olib diskka saqlaymiz, keyingi safar DISKDAN beramiz — proxy
+  // orqali QAYTA YUKLANMAYDI (har CMS so'rov ~1.3s tejaydi). Bloklab bo'lmaydi
+  // (forma buziladi), lekin cache'lash xavfsiz. .env: BOOKING_CMS_CACHE=false o'chiradi.
+  const cmsCacheOn =
+    !blockCms &&
+    (process.env.BOOKING_CMS_CACHE || "true").toLowerCase() !== "false";
+  const cmsCacheDir = path.join(
+    os.tmpdir(),
+    "visa-cms-cache",
+  );
+  if (cmsCacheOn) {
+    try {
+      fs.mkdirSync(cmsCacheDir, { recursive: true });
+    } catch {
+      /* ignore */
+    }
+  }
+  const isCms = (url: string) =>
+    url.includes("cloudfront.net") && url.includes("entries");
+  const cmsKey = (url: string) => {
+    let h = 0;
+    for (let i = 0; i < url.length; i++) h = (h * 31 + url.charCodeAt(i)) >>> 0;
+    return `cms-${h.toString(36)}.json`;
+  };
+
+  await context.route("**/*", async (route) => {
     try {
       const req = route.request();
       const type = req.resourceType();
@@ -123,6 +150,45 @@ export async function applyResourceBlocking(
       ) {
         return route.abort();
       }
+
+      // CMS DISK CACHE: statik CMS javoblarini diskdan beramiz (proxy'siz).
+      if (cmsCacheOn && isCms(url) && req.method() === "GET") {
+        const file = path.join(cmsCacheDir, cmsKey(url));
+        // Cache'da bor — diskdan beramiz (proxy orqali ketmaydi).
+        try {
+          if (fs.existsSync(file)) {
+            const cached = JSON.parse(fs.readFileSync(file, "utf8"));
+            return route.fulfill({
+              status: cached.status,
+              headers: cached.headers,
+              body: Buffer.from(cached.body, "base64"),
+            });
+          }
+        } catch {
+          /* cache buzilgan — qaytadan olamiz */
+        }
+        // Cache'da yo'q — proxy orqali olib, diskka saqlaymiz.
+        try {
+          const resp = await route.fetch();
+          const body = await resp.body();
+          try {
+            fs.writeFileSync(
+              file,
+              JSON.stringify({
+                status: resp.status(),
+                headers: resp.headers(),
+                body: body.toString("base64"),
+              }),
+            );
+          } catch {
+            /* yozib bo'lmadi — muhim emas */
+          }
+          return route.fulfill({ response: resp, body });
+        } catch {
+          return route.continue();
+        }
+      }
+
       if (
         BLOCKED_RESOURCE_TYPES.has(type) ||
         BLOCKED_URL_PATTERNS.some((p) => url.includes(p))
