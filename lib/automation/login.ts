@@ -442,7 +442,9 @@ export async function loginToBooking(
           }
         })();
         const tail = t.url.split("/").pop()?.slice(0, 32) || "";
-        step(`  ${String(t.ms).padStart(6)}ms  ${t.type.padEnd(8)} ${host} ${tail}`);
+        step(
+          `  ${String(t.ms).padStart(6)}ms  ${t.type.padEnd(8)} ${host} ${tail}`,
+        );
       }
     }
 

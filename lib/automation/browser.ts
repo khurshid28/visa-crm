@@ -95,6 +95,13 @@ export async function applyResourceBlocking(
   if ((process.env.BOOKING_BLOCK_RESOURCES || "").toLowerCase() === "false") {
     return;
   }
+  // CMS (Contentful) kontent so'rovlarini bloklash — login sahifasidagi MATN/
+  // tarjima (resourceGroup, mission). DIQQAT: SINOV ko'rsatdi — bu CMS Angular
+  // formasini RENDER qilish uchun KERAK (bloklansa email/parol maydoni chiqmaydi).
+  // Shuning uchun DEFAULT O'CHIQ. Faqat .env BOOKING_BLOCK_CMS=true bo'lsa bloklanadi
+  // (xavfli — sahifa buzilishi mumkin).
+  const blockCms =
+    (process.env.BOOKING_BLOCK_CMS || "false").toLowerCase() === "true";
   await context.route("**/*", (route) => {
     try {
       const req = route.request();
@@ -106,6 +113,15 @@ export async function applyResourceBlocking(
         url.includes("/cdn-cgi/")
       ) {
         return route.continue();
+      }
+      // CMS kontenti (matn) — i18n'dan tashqari (til kerak, qoldiramiz).
+      if (
+        blockCms &&
+        url.includes("cloudfront.net") &&
+        url.includes("entries") &&
+        !url.includes("i18n")
+      ) {
+        return route.abort();
       }
       if (
         BLOCKED_RESOURCE_TYPES.has(type) ||
