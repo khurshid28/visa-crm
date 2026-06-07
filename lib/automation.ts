@@ -922,6 +922,8 @@ export type LoginResult = {
   exitIp: string | null;
   statusCode: number | null;
   pageError: string | null;
+  token: string | null; // auth token (JWT/session) — booking bosqichi uchun
+  tokenSource: string | null; // token qayerdan olindi (localStorage/cookie kaliti)
 };
 
 /**
@@ -957,6 +959,8 @@ export async function loginToBooking(
     exitIp: null,
     statusCode: null,
     pageError: null,
+    token: null,
+    tokenSource: null,
   };
   if (!url) {
     return { ...base, note: "URL sozlanmagan (.env: BOOKING_LOGIN_URL)" };
@@ -975,6 +979,15 @@ export async function loginToBooking(
       Number(process.env.BOOKING_PROXY_IP_RETRIES || "4"),
     );
     const proxyOn = isProxyEnabled();
+
+    // Login POST javobidan token'ni TUTIB OLAMIZ (eng ishonchli yo'l): VFS
+    // /login bosilganda XHR javobida token JSON ichida keladi. Shu yerda
+    // ushlab qolamiz (localStorage'ga yozilmasligi mumkin).
+    let capturedToken: string | null = null;
+    let capturedTokenSource: string | null = null;
+    // Login API (lift-api.../user/login) javob status'i — 429/4xx bo'lsa login
+    // muvaffaqiyatsiz (rate-limit yoki noto'g'ri parol).
+    let loginApiStatus: number | null = null;
 
     for (let attempt = 0; attempt < maxIpRetries; attempt++) {
       // Avvalgi (bloklangan) sessiyani yopamiz.
@@ -1006,6 +1019,30 @@ export async function loginToBooking(
         if (s >= 400) {
           pageErrors.push(`HTTP ${s}: ${res.url().slice(0, 80)}`.slice(0, 200));
         }
+      });
+      // Token'ni login/auth XHR javobidan tutib olamiz.
+      p.on("response", (res: import("playwright").Response) => {
+        if (capturedToken) return;
+        const u = res.url().toLowerCase();
+        if (!/login|auth|token|signin|session|account/.test(u)) return;
+        // challenges.cloudflare — token emas, o'tkazib yuboramiz.
+        if (u.includes("challenges.cloudflare.com") || u.includes("/cdn-cgi/"))
+          return;
+        // Login API status'ini eslab qolamiz (user/login).
+        if (/\/user\/login|\/login\b/.test(u)) {
+          loginApiStatus = res.status();
+        }
+        res
+          .text()
+          .then((body) => {
+            if (capturedToken || !body) return;
+            const tok = extractTokenFromBody(body);
+            if (tok) {
+              capturedToken = tok;
+              capturedTokenSource = `response:${res.url().slice(0, 80)}`;
+            }
+          })
+          .catch(() => {});
       });
 
       // Warmup: avval asosiy sahifani ochamiz (region cookie/sessiya o'rnatadi
@@ -1186,18 +1223,57 @@ export async function loginToBooking(
     // Login muvaffaqiyatini taxminiy aniqlaymiz: URL o'zgardi (login sahifasidan
     // chiqdi) yoki xato xabari yo'q.
     const stillOnLogin = /login|sign\s*in/.test(base.finalUrl.toLowerCase());
+    const notFound = /page-not-found|not-found|404/.test(
+      base.finalUrl.toLowerCase(),
+    );
     const hasError = /invalid|incorrect|wrong|failed|error|noto'g'ri|xato/.test(
       bodyText,
     );
-    base.ok = base.submitted && !hasError && !stillOnLogin;
+    // Login API (user/login) 4xx/429 qaytarsa — muvaffaqiyatsiz (rate-limit yoki
+    // noto'g'ri parol). 429 = juda ko'p urinish, biroz kutish kerak.
+    const apiBad = loginApiStatus != null && loginApiStatus >= 400;
+    base.ok =
+      base.submitted && !hasError && !stillOnLogin && !notFound && !apiBad;
 
     base.note = base.ok
       ? "Login muvaffaqiyatli (taxminiy)"
-      : hasError
-        ? "Login xato xabari aniqlandi"
-        : stillOnLogin
-          ? "Hali login sahifasida (parol/captcha tekshiring)"
-          : "Login holati noaniq";
+      : apiBad
+        ? loginApiStatus === 429
+          ? "Login API 429 (juda ko'p urinish — biroz kuting)"
+          : `Login API xatosi (HTTP ${loginApiStatus})`
+        : hasError
+          ? "Login xato xabari aniqlandi"
+          : stillOnLogin
+            ? "Hali login sahifasida (parol/captcha tekshiring)"
+            : notFound
+              ? "Sahifa topilmadi (login API javobi xato bo'lishi mumkin)"
+              : "Login holati noaniq";
+
+    // Login muvaffaqiyatli bo'lsa — auth token'ni (JWT/session) o'qiymiz.
+    if (base.ok) {
+      // 1-navbat: login XHR javobidan tutilgan token (eng ishonchli).
+      if (capturedToken) {
+        base.token = capturedToken;
+        base.tokenSource = capturedTokenSource;
+        step(`Token olindi ✓ (${capturedTokenSource})`);
+      } else {
+        // 2-navbat: localStorage/sessionStorage/cookie.
+        const tok = await readAuthToken(page);
+        if (tok) {
+          base.token = tok.token;
+          base.tokenSource = tok.source;
+          step(`Token olindi ✓ (${tok.source})`);
+        } else {
+          step("Token topilmadi (XHR/localStorage/cookie da yo'q)");
+          // DEBUG: barcha storage kalitlari + cookie nomlarini saqlaymiz.
+          if (
+            (process.env.BOOKING_DUMP_STORAGE || "").toLowerCase() === "true"
+          ) {
+            await dumpStorage(page).catch(() => {});
+          }
+        }
+      }
+    }
 
     // Login bo'lmasa — sahifa holatini saqlaymiz (VFS xato xabarini ko'rish uchun).
     if (!base.ok) {
@@ -1285,6 +1361,167 @@ function parseIpFromText(txt: string): string | null {
   }
   const m = t.match(/(\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{6,}/);
   return m ? m[0].slice(0, 60) : null;
+}
+
+/**
+ * Login muvaffaqiyatli bo'lgach auth token'ni (JWT/session) o'qiydi.
+ * Token kalit nomi har xil bo'lishi mumkin (accessToken, token, id_token...),
+ * shuning uchun JWT shaklidagi (eyJ... 3 qism) yoki token-ga o'xshash kalitlarni
+ * qidiramiz. Topilsa {token, source} qaytaradi.
+ */
+async function readAuthToken(
+  page: import("playwright").Page,
+): Promise<{ token: string; source: string } | null> {
+  try {
+    const found = await page.evaluate(() => {
+      const isJwt = (v: string) =>
+        typeof v === "string" && /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(v.trim());
+      const keyLooks = (k: string) =>
+        /token|jwt|auth|session|bearer|access|id_token/i.test(k);
+      const scan = (store: Storage, label: string) => {
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i);
+          if (!k) continue;
+          const raw = store.getItem(k) || "";
+          // To'g'ridan-to'g'ri JWT.
+          if (isJwt(raw)) return { token: raw, source: `${label}:${k}` };
+          // JSON ichida token bo'lishi mumkin.
+          try {
+            const obj = JSON.parse(raw);
+            const stack: unknown[] = [obj];
+            while (stack.length) {
+              const cur = stack.pop();
+              if (cur && typeof cur === "object") {
+                for (const [kk, vv] of Object.entries(
+                  cur as Record<string, unknown>,
+                )) {
+                  if (typeof vv === "string" && (isJwt(vv) || keyLooks(kk))) {
+                    if (isJwt(vv) || vv.length > 20)
+                      return { token: vv, source: `${label}:${k}.${kk}` };
+                  } else if (vv && typeof vv === "object") {
+                    stack.push(vv);
+                  }
+                }
+              }
+            }
+          } catch {
+            /* JSON emas */
+          }
+          // Kalit nomi token-ga o'xshasa va qiymat uzun bo'lsa.
+          if (keyLooks(k) && raw.length > 20)
+            return { token: raw, source: `${label}:${k}` };
+        }
+        return null;
+      };
+      return (
+        scan(window.localStorage, "localStorage") ||
+        scan(window.sessionStorage, "sessionStorage")
+      );
+    });
+    if (found && found.token) {
+      return { token: found.token.slice(0, 4000), source: found.source };
+    }
+  } catch {
+    /* ignore */
+  }
+  // 2) Cookie'lardan qidiramiz.
+  try {
+    const cookies = await page.context().cookies();
+    for (const ck of cookies) {
+      const v = ck.value || "";
+      if (
+        /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(v) ||
+        (/token|jwt|auth|session|access/i.test(ck.name) && v.length > 20)
+      ) {
+        return { token: v.slice(0, 4000), source: `cookie:${ck.name}` };
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
+ * Login XHR javobi (JSON yoki matn) ichidan token'ni ajratadi. JWT (eyJ...)
+ * yoki token-ga o'xshash kalitlarni (accessToken/token/id_token/...) qidiradi.
+ */
+function extractTokenFromBody(body: string): string | null {
+  const t = (body || "").trim();
+  if (!t) return null;
+  const isJwt = (v: unknown): v is string =>
+    typeof v === "string" && /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(v.trim());
+  const keyLooks = (k: string) =>
+    /token|jwt|bearer|access|id_token|refresh/i.test(k);
+  // Avval JSON sifatida.
+  try {
+    const obj = JSON.parse(t);
+    const stack: unknown[] = [obj];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (cur && typeof cur === "object") {
+        for (const [k, v] of Object.entries(cur as Record<string, unknown>)) {
+          if (isJwt(v)) return v.slice(0, 4000);
+          if (typeof v === "string" && keyLooks(k) && v.length > 20)
+            return v.slice(0, 4000);
+          if (v && typeof v === "object") stack.push(v);
+        }
+      }
+    }
+  } catch {
+    /* JSON emas */
+  }
+  // Xom matnda JWT bo'lsa.
+  const m = t.match(/eyJ[\w-]+\.[\w-]+\.[\w-]+/);
+  return m ? m[0].slice(0, 4000) : null;
+}
+
+/**
+ * DEBUG: barcha localStorage/sessionStorage kalitlari + cookie nomlarini
+ * uploads/debug ga saqlaydi (token qayerdaligini topish uchun).
+ */
+async function dumpStorage(page: import("playwright").Page): Promise<void> {
+  try {
+    const data = await page.evaluate(() => {
+      const dump = (store: Storage) => {
+        const out: Record<string, string> = {};
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i);
+          if (k) out[k] = (store.getItem(k) || "").slice(0, 300);
+        }
+        return out;
+      };
+      return {
+        localStorage: dump(window.localStorage),
+        sessionStorage: dump(window.sessionStorage),
+      };
+    });
+    const cookies = await page.context().cookies();
+    const dir = path.join(process.cwd(), "uploads", "debug");
+    fs.mkdirSync(dir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.writeFileSync(
+      path.join(dir, `storage-${ts}.json`),
+      JSON.stringify(
+        {
+          url: page.url(),
+          ...data,
+          cookies: cookies.map((c) => ({
+            name: c.name,
+            valueLen: (c.value || "").length,
+            value: (c.value || "").slice(0, 120),
+          })),
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    // eslint-disable-next-line no-console
+    console.log(`[debug] storage saqlandi: storage-${ts}.json`);
+  } catch {
+    /* ignore */
+  }
 }
 
 /**

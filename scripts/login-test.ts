@@ -103,6 +103,14 @@ async function main() {
   row("Exit IP", res.exitIp || dim("—"));
   row("HTTP status", String(res.statusCode ?? "—"));
   row("Final URL", res.finalUrl || dim("—"));
+  row(
+    "Token",
+    res.token ? green(`olindi ✓ (${res.tokenSource})`) : red("yo'q ✗"),
+    !!res.token,
+  );
+  if (res.token) {
+    row("Token (qisqa)", dim(res.token.slice(0, 48) + "..."));
+  }
   if (res.pageError) row("Xatolar", yellow(res.pageError));
   hr();
   console.log("");
