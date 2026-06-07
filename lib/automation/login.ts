@@ -88,6 +88,10 @@ export async function loginToBooking(
     // Login API (lift-api.../user/login) javob status'i — 429/4xx bo'lsa login
     // muvaffaqiyatsiz (rate-limit yoki noto'g'ri parol).
     let loginApiStatus: number | null = null;
+    // Oxirgi urinish proxy/tunnel uzilishi bilan tugadimi? (VPN/proxy o'lik bo'lsa
+    // bekorga davom etmaymiz — aniq xato qaytaramiz).
+    let lastGotoError = false;
+    let pageOpened = false;
 
     for (let attempt = 0; attempt < maxIpRetries; attempt++) {
       // Avvalgi (bloklangan) sessiyani yopamiz.
@@ -195,6 +199,8 @@ export async function loginToBooking(
       // — JS challenge avtomatik hal bo'lishini kutamiz (managed challenge).
       const cleared = gotoError ? false : await waitForCloudflareClear(p, step);
       const blocked = gotoError || base.statusCode === 403 || !cleared;
+      lastGotoError = gotoError;
+      if (!gotoError && base.statusCode != null) pageOpened = true;
 
       // Bloklanmagan bo'lsa — davom etamiz. Proxy o'chiq bo'lsa IP almashtirib
       // bo'lmaydi (qayta urinish foydasiz). Oxirgi urinish ham shu yerda tugaydi.
@@ -216,6 +222,18 @@ export async function loginToBooking(
 
     if (!page) {
       return { ...base, note: "Brauzer ochilmadi" };
+    }
+
+    // PROXY/VPN O'LIK: sahifa biror marta ham ochilmadi va oxirgi urinish tunnel
+    // uzilishi bilan tugadi — bekorga davom etmaymiz (email/captcha kutib o'tirmaymiz).
+    if (!pageOpened && lastGotoError) {
+      if (closeSession) await closeSession().catch(() => {});
+      closeSession = null;
+      base.pageError = pageErrors.slice(0, 10).join(" | ");
+      return {
+        ...base,
+        note: "Proxy/VPN ulanmadi (ERR_TUNNEL_CONNECTION_FAILED) — internet/proxy balansini tekshiring",
+      };
     }
 
     // Cookie banner login sahifasida ham chiqishi mumkin.
