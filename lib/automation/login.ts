@@ -375,25 +375,40 @@ export async function loginToBooking(
     const hasError = /invalid|incorrect|wrong|failed|error|noto'g'ri|xato/.test(
       bodyText,
     );
+    // AKKAUNT CHEKLOVI (429001): VFS akkauntni "unusual activity" deb vaqtincha
+    // bloklaydi (oddiy IP rate-limit EMAS — bu akkaunt darajasida). Sahifada
+    // "Access Restricted for User ID (429001)" ko'rinadi. Bu akkaunt biroz
+    // dam olishi kerak — boshqa IP/proxy yordam bermaydi.
+    const accountRestricted =
+      /429001|access restricted for user|unusual activity|temporarily restricted/.test(
+        bodyText,
+      );
     // Login API (user/login) 4xx/429 qaytarsa — muvaffaqiyatsiz (rate-limit yoki
     // noto'g'ri parol). 429 = juda ko'p urinish, biroz kutish kerak.
     const apiBad = loginApiStatus != null && loginApiStatus >= 400;
     base.ok =
-      base.submitted && !hasError && !stillOnLogin && !notFound && !apiBad;
+      base.submitted &&
+      !hasError &&
+      !stillOnLogin &&
+      !notFound &&
+      !apiBad &&
+      !accountRestricted;
 
     base.note = base.ok
       ? "Login muvaffaqiyatli (taxminiy)"
-      : apiBad
-        ? loginApiStatus === 429
-          ? "Login API 429 (juda ko'p urinish — biroz kuting)"
-          : `Login API xatosi (HTTP ${loginApiStatus})`
-        : hasError
-          ? "Login xato xabari aniqlandi"
-          : stillOnLogin
-            ? "Hali login sahifasida (parol/captcha tekshiring)"
-            : notFound
-              ? "Sahifa topilmadi (login API javobi xato bo'lishi mumkin)"
-              : "Login holati noaniq";
+      : accountRestricted
+        ? "AKKAUNT VAQTINCHA BLOKLANGAN (429001 — unusual activity). Bu akkauntni biroz tindiring; boshqa IP yordam bermaydi."
+        : apiBad
+          ? loginApiStatus === 429
+            ? "Login API 429 (juda ko'p urinish — biroz kuting)"
+            : `Login API xatosi (HTTP ${loginApiStatus})`
+          : hasError
+            ? "Login xato xabari aniqlandi"
+            : stillOnLogin
+              ? "Hali login sahifasida (parol/captcha tekshiring)"
+              : notFound
+                ? "Sahifa topilmadi (login API javobi xato bo'lishi mumkin)"
+                : "Login holati noaniq";
 
     // Login muvaffaqiyatli bo'lsa — auth token'ni (JWT/session) o'qiymiz.
     if (base.ok) {
