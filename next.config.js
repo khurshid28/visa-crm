@@ -8,6 +8,11 @@ const nextConfig = {
       "@prisma/client",
       "playwright",
       "playwright-core",
+      "playwright-extra",
+      "puppeteer-extra",
+      "puppeteer-extra-plugin-stealth",
+      "clone-deep",
+      "merge-deep",
     ],
   },
 };
