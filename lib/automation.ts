@@ -1127,11 +1127,9 @@ export async function loginToBooking(
       .catch(() => {});
     const emailEl = page.locator(emailSel).first();
     if ((await emailEl.count()) > 0) {
-      await emailEl.click({ timeout: 5000 }).catch(() => {});
-      await emailEl.fill("", { timeout: 3000 }).catch(() => {});
-      await emailEl.type(email, { delay: rand(50, 120), timeout: 10000 });
-      base.filledEmail = true;
-      step("Email kiritildi");
+      const ok = await fillFieldReliably(page, emailEl, email);
+      base.filledEmail = ok;
+      step(ok ? "Email kiritildi" : "Email to'liq kiritilmadi (chala)");
     } else {
       step("Email maydoni topilmadi!");
       // Debug: sahifa holatini saqlaymiz (nima ko'rinayotganini bilish uchun).
@@ -1143,11 +1141,9 @@ export async function loginToBooking(
     const passSel = '#password, input[formcontrolname="password"]';
     const passEl = page.locator(passSel).first();
     if ((await passEl.count()) > 0) {
-      await passEl.click({ timeout: 5000 }).catch(() => {});
-      await passEl.fill("", { timeout: 3000 }).catch(() => {});
-      await passEl.type(password, { delay: rand(50, 120), timeout: 10000 });
-      base.filledPassword = true;
-      step("Parol kiritildi");
+      const ok = await fillFieldReliably(page, passEl, password);
+      base.filledPassword = ok;
+      step(ok ? "Parol kiritildi" : "Parol to'liq kiritilmadi (chala)");
     } else {
       step("Parol maydoni topilmadi!");
     }
@@ -2018,6 +2014,40 @@ async function fillSmartField(
     // jim — natijaga ta'sir qilmaydi.
   }
   return false;
+}
+
+/**
+ * Maydonni ISHONCHLI to'ldiradi: bosadi, tozalaydi, inson kabi yozadi va
+ * qiymatni TEKSHIRADI. Chala bo'lsa (harf tushib qolsa) 3 martagacha qayta
+ * yozadi. Oxirgi chora — fill() bilan to'liq qo'yadi. Email/parol uchun.
+ */
+async function fillFieldReliably(
+  page: import("playwright").Page,
+  el: import("playwright").Locator,
+  value: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await el.click({ timeout: 5000 }).catch(() => {});
+      await el.fill("", { timeout: 3000 }).catch(() => {});
+      await page.keyboard.press("Control+A").catch(() => {});
+      await page.keyboard.press("Delete").catch(() => {});
+      await el.type(value, { delay: rand(60, 140), timeout: 15000 });
+      await humanPause(120, 280);
+      const current = await el.inputValue().catch(() => "");
+      if (current === value) return true;
+    } catch {
+      /* keyingi urinish */
+    }
+  }
+  // Oxirgi chora: fill() bilan to'liq qo'yamiz (to'liq, lekin inson kabi emas).
+  try {
+    await el.fill(value, { timeout: 5000 });
+    const current = await el.inputValue().catch(() => "");
+    return current === value;
+  } catch {
+    return false;
+  }
 }
 
 /**
