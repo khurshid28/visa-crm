@@ -45,6 +45,9 @@ export async function POST(req: NextRequest) {
     slotAt,
     windowMinutes,
     registerLeadMinutes,
+    centre: body.centre ? String(body.centre) : null,
+    category: body.category ? String(body.category) : null,
+    subCategory: body.subCategory ? String(body.subCategory) : null,
   });
   return NextResponse.json({ ok: true, slot });
 }

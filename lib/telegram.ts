@@ -147,6 +147,27 @@ export async function sendDocument(
   await callApi("sendDocument", fd);
 }
 
+// Bitta chat'ga rasm (skrinshot) yuboradi.
+export async function sendPhoto(
+  chatId: string,
+  photo: { buffer: Buffer | Uint8Array; filename: string; caption?: string },
+): Promise<void> {
+  const fd = new FormData();
+  fd.append("chat_id", chatId);
+  if (photo.caption) {
+    fd.append("caption", photo.caption);
+    fd.append("parse_mode", "HTML");
+  }
+  const bytes =
+    photo.buffer instanceof Buffer
+      ? new Uint8Array(photo.buffer)
+      : photo.buffer;
+  const ab = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(ab).set(bytes);
+  fd.append("photo", new Blob([ab], { type: "image/png" }), photo.filename);
+  await callApi("sendPhoto", fd);
+}
+
 // Barcha admin chat'larga matnli xabar tarqatadi.
 export async function broadcastMessage(
   text: string,

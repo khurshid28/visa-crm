@@ -58,6 +58,24 @@ export type SlotCheckResult = {
   url: string;
 };
 
+// Kalendar (appointment) sahifasini ochib, bo'sh kun bor-yo'qligini aniqlash
+// natijasi. detectCalendar() qaytaradi — slot monitoring shu asosida ishlaydi.
+export type CalendarDetectResult = {
+  open: boolean; // bo'sh kun(lar) topildi => order navbatini ishga tushirsa bo'ladi
+  loggedIn: boolean; // tekshiruv logindan o'tib amalga oshdimi
+  calendarFound: boolean; // sahifada kalendar/slot vidjeti bormi
+  availableDates: string[]; // topilgan bo'sh kunlar (matn, best-effort)
+  note: string; // qisqa izoh (lastMessage uchun)
+  url: string; // tekshirilgan sahifa URL
+  finalUrl: string; // tekshiruv oxiridagi URL (redirect bo'lsa)
+  screenshotPath: string | null; // saqlangan skrinshot yo'li (debug/proof)
+  exitIp: string | null; // proxy orqali chiqqan tashqi IP
+  statusCode: number | null; // sahifa HTTP status kodi
+  proxyServer: string | null; // ulangan proxy gateway (host:port) yoki null
+  proxyCountry: string | null; // proxy davlati (uz/kz)
+  durationMs: number; // tekshiruv davomiyligi (ms)
+};
+
 export type LoginResult = {
   ok: boolean; // login muvaffaqiyatli bo'ldimi (taxminiy belgilar bo'yicha)
   note: string;

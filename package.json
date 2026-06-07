@@ -9,6 +9,8 @@
     "lint": "next lint",
     "bot": "tsx scripts/bot.ts",
     "worker:order": "tsx scripts/order-worker.ts",
+    "worker:slot": "tsx scripts/slot-worker.ts",
+    "slot:check": "tsx scripts/slot-check-test.ts",
     "login:test": "tsx scripts/login-test.ts",
     "login:test:parallel": "tsx scripts/login-parallel-test.ts",
     "db:push": "prisma db push",

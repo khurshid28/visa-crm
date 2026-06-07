@@ -486,11 +486,21 @@ function prepareCopiedUserDataDir(
 function findChromeExe(): string | null {
   const env = (process.env.BOOKING_CHROME_PATH || "").trim();
   if (env && fs.existsSync(env)) return env;
-  const candidates = [
+  // Linux/Docker (mcr playwright image: `npx playwright install chrome` o'rnatadi).
+  const linuxCandidates = [
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/opt/google/chrome/chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
+  const winCandidates = [
     `${process.env["ProgramFiles"] || "C:/Program Files"}/Google/Chrome/Application/chrome.exe`,
     `${process.env["ProgramFiles(x86)"] || "C:/Program Files (x86)"}/Google/Chrome/Application/chrome.exe`,
     `${process.env["LOCALAPPDATA"] || ""}/Google/Chrome/Application/chrome.exe`,
   ];
+  const candidates =
+    process.platform === "win32" ? winCandidates : linuxCandidates;
   for (const c of candidates) {
     try {
       if (c && fs.existsSync(c)) return c;
@@ -564,6 +574,10 @@ async function connectRealChrome(opts?: {
   profileKey?: string | null;
   /** Har urinishda toza profil (eski cookie/cache buzilgan bo'lsa). */
   attempt?: number;
+  /** CDP profil bazasini majburan belgilash (slot-monitor uchun alohida papka). */
+  cdpProfileBase?: string;
+  /** BOOKING_CDP_FRESH_PROFILE env'ni bekor qilib, sessiyani saqlash/tozalashni majburlash. */
+  cdpFreshProfile?: boolean;
 }): Promise<{
   context: import("playwright").BrowserContext;
   close: () => Promise<void>;
@@ -579,9 +593,11 @@ async function connectRealChrome(opts?: {
     "true";
   // Har ishga tushganda profilni TOZALAB ishlatish (eski/buzilgan sessiya
   // muammosini oldini oladi). .env: BOOKING_CDP_FRESH_PROFILE=true.
+  // opts.cdpFreshProfile berilsa — env'dan ustun (slot-monitor sessiyani saqlaydi).
   const freshProfile =
+    opts?.cdpFreshProfile ??
     (process.env.BOOKING_CDP_FRESH_PROFILE || "").trim().toLowerCase() ===
-    "true";
+      "true";
 
   const keySafe = sanitizeProfileKey(opts?.profileKey || "default");
   let userDataDir: string;
@@ -603,6 +619,7 @@ async function connectRealChrome(opts?: {
     // Har user o'z persistent papkasida (yangi profil — Turnstile'ni
     // chrome.exe binarining o'zi o'tadi, Profile 3 cookie'lari shart emas).
     const base = (
+      opts?.cdpProfileBase ||
       process.env.BOOKING_CDP_PROFILE_DIR ||
       process.env.BOOKING_PROFILE_DIR ||
       path.join(os.tmpdir(), "visa-cdp-profiles")
@@ -644,6 +661,18 @@ async function connectRealChrome(opts?: {
 
   // --- chrome.exe ni bo'sh portda ishga tushirish ---
   const port = await findFreePort();
+  // Docker/Linux: ekran yo'q => headless kerak; sandbox root'da ishlamaydi.
+  const isLinux = process.platform !== "win32";
+  const headless = envHeadless();
+  const dockerArgs: string[] = [];
+  if (isLinux) {
+    // Konteynerda root => --no-sandbox shart. /dev/shm kichik => disable.
+    dockerArgs.push("--no-sandbox", "--disable-dev-shm-usage");
+    if (headless) {
+      // Yangi headless rejimi — haqiqiy Chrome'ga eng yaqin (Turnstile uchun).
+      dockerArgs.push("--headless=new", "--disable-gpu");
+    }
+  }
   const args = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
@@ -658,6 +687,7 @@ async function connectRealChrome(opts?: {
     "--disable-renderer-backgrounding",
     "--disable-backgrounding-occluded-windows",
     "--disable-ipc-flooding-protection",
+    ...dockerArgs,
     ...(localProxyUrl ? [`--proxy-server=${localProxyUrl}`] : []),
     "about:blank",
   ];
@@ -719,6 +749,7 @@ async function connectRealChrome(opts?: {
 export async function openBrowserContext(
   profileDir: string,
   proxyTarget?: ProxyTarget,
+  cdpOpts?: { cdpProfileBase?: string; cdpFreshProfile?: boolean },
 ) {
   const chromium = await getStealthChromium();
   const proxy = proxyTarget ? proxyFor(proxyTarget) : undefined;
@@ -736,6 +767,8 @@ export async function openBrowserContext(
       proxy,
       profileKey: proxyTarget?.profileKey ?? null,
       attempt: proxyTarget?.ipAttempt ?? 0,
+      cdpProfileBase: cdpOpts?.cdpProfileBase,
+      cdpFreshProfile: cdpOpts?.cdpFreshProfile,
     });
     if (real) return real;
     // CDP muvaffaqiyatsiz bo'lsa — oddiy rejimga tushamiz (pastda).

@@ -11,6 +11,7 @@
 //   - booking.ts    — runBooking (register/order)
 //   - activation.ts — runActivation
 //   - slot.ts       — checkSlotOpen
+//   - calendar.ts   — detectCalendar (kalendar bor/yo'q + bo'sh kunlar)
 // ====================================================================
 
 export type {
@@ -18,6 +19,7 @@ export type {
   AutomationResult,
   ActivationResult,
   SlotCheckResult,
+  CalendarDetectResult,
   LoginResult,
 } from "./types";
 
@@ -26,3 +28,4 @@ export { loginToBooking } from "./login";
 export { runBooking } from "./booking";
 export { runActivation } from "./activation";
 export { checkSlotOpen } from "./slot";
+export { detectCalendar } from "./calendar";

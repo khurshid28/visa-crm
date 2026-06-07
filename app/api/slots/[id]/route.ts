@@ -39,6 +39,10 @@ export async function PATCH(
         body.registerLeadMinutes !== undefined
           ? Number(body.registerLeadMinutes)
           : undefined,
+      centre: body.centre !== undefined ? String(body.centre) : undefined,
+      category: body.category !== undefined ? String(body.category) : undefined,
+      subCategory:
+        body.subCategory !== undefined ? String(body.subCategory) : undefined,
     });
     return NextResponse.json({ ok: true, slot });
   }

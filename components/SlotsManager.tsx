@@ -632,6 +632,9 @@ function SlotFormModal({
   const [registerLeadMinutes, setRegisterLeadMinutes] = useState(
     slot?.registerLeadMinutes ?? 5,
   );
+  const [centre, setCentre] = useState(slot?.centre ?? "");
+  const [category, setCategory] = useState(slot?.category ?? "");
+  const [subCategory, setSubCategory] = useState(slot?.subCategory ?? "");
   const [superUsername, setSuperUsername] = useState("");
   const [superPassword, setSuperPassword] = useState("");
   const [error, setError] = useState("");
@@ -655,6 +658,9 @@ function SlotFormModal({
             slotAt: slotAt || null,
             windowMinutes,
             registerLeadMinutes,
+            centre,
+            category,
+            subCategory,
           }),
         }).catch(() => null)
       : await fetch("/api/slots", {
@@ -667,6 +673,9 @@ function SlotFormModal({
             slotAt: slotAt || null,
             windowMinutes,
             registerLeadMinutes,
+            centre,
+            category,
+            subCategory,
             superUsername,
             superPassword,
           }),
@@ -817,6 +826,40 @@ function SlotFormModal({
                   {m === 0 ? "0 (yo'q)" : `${m} daq`}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* VFS appointment-detail tanlovlari (kalendar tekshiruvi uchun).
+              Bo'sh qoldirsangiz .env default (BOOKING_CALENDAR_*) ishlatiladi. */}
+          <div className="rounded-xl border border-dashed border-brand-200 bg-brand-50/40 p-3 dark:border-brand-500/20 dark:bg-brand-500/5">
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-300">
+              <CalendarIcon size={13} variant="Bold" /> VFS kalendar tanlovlari
+            </p>
+            <div className="space-y-3">
+              <Field label="Application Centre">
+                <input
+                  value={centre}
+                  onChange={(e) => setCentre(e.target.value)}
+                  placeholder="masalan: VFS GLOBAL SERVICES UBKN"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-brand-500/20"
+                />
+              </Field>
+              <Field label="Appointment category">
+                <input
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  placeholder="masalan: Latvia Long Stay/Visa D"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-brand-500/20"
+                />
+              </Field>
+              <Field label="Sub-category">
+                <input
+                  value={subCategory}
+                  onChange={(e) => setSubCategory(e.target.value)}
+                  placeholder="masalan: Cargo drivers (Visa D) Uzbek, Turkmen"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-brand-500/20"
+                />
+              </Field>
             </div>
           </div>
 

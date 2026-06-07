@@ -1,10 +1,18 @@
 import { prisma } from "./prisma";
 import { countryFlag, countryName } from "./options";
-import { checkSlotOpen } from "./automation";
+import { detectCalendar } from "./automation";
+import type { CalendarDetectResult } from "./automation";
 import {
   enqueueSlotRegisteredGroups,
   enqueueSlotStaleReRegisters,
 } from "./order-queue";
+import {
+  isTelegramConfigured,
+  getAdminChatIds,
+  sendMessage,
+  sendPhoto,
+} from "./telegram";
+import * as fs from "fs";
 
 export type SlotDirection = {
   fromCountry: string;
@@ -23,11 +31,15 @@ export type SlotView = {
   slotAt: string | null;
   windowMinutes: number;
   registerLeadMinutes: number;
+  centre: string | null;
+  category: string | null;
+  subCategory: string | null;
   active: boolean;
   paused: boolean;
   lastCheckAt: string | null;
   lastMessage: string;
   openedAt: string | null;
+  lastShotPath: string | null;
   createdAt: string;
   groupsCount: number;
   applicantsCount: number;
@@ -58,11 +70,15 @@ type SlotRow = {
   slotAt: Date | null;
   windowMinutes: number;
   registerLeadMinutes: number;
+  centre: string | null;
+  category: string | null;
+  subCategory: string | null;
   active: boolean;
   paused: boolean;
   lastCheckAt: Date | null;
   lastMessage: string;
   openedAt: Date | null;
+  lastShotPath: string | null;
   createdAt: Date;
   _count?: { groups: number };
 };
@@ -79,11 +95,15 @@ function toView(
     slotAt: row.slotAt ? row.slotAt.toISOString() : null,
     windowMinutes: row.windowMinutes,
     registerLeadMinutes: row.registerLeadMinutes,
+    centre: row.centre ?? null,
+    category: row.category ?? null,
+    subCategory: row.subCategory ?? null,
     active: row.active,
     paused: row.paused,
     lastCheckAt: row.lastCheckAt ? row.lastCheckAt.toISOString() : null,
     lastMessage: row.lastMessage,
     openedAt: row.openedAt ? row.openedAt.toISOString() : null,
+    lastShotPath: row.lastShotPath ?? null,
     createdAt: row.createdAt.toISOString(),
     groupsCount: row._count?.groups ?? 0,
     applicantsCount,
@@ -149,6 +169,9 @@ export async function createSlot(input: {
   slotAt?: string | null;
   windowMinutes?: number;
   registerLeadMinutes?: number;
+  centre?: string | null;
+  category?: string | null;
+  subCategory?: string | null;
 }): Promise<SlotView> {
   const row = await prisma.slot.create({
     data: {
@@ -158,6 +181,9 @@ export async function createSlot(input: {
       slotAt: input.slotAt ? new Date(input.slotAt) : null,
       windowMinutes: input.windowMinutes ?? 10,
       registerLeadMinutes: input.registerLeadMinutes ?? 5,
+      centre: input.centre?.trim() || null,
+      category: input.category?.trim() || null,
+      subCategory: input.subCategory?.trim() || null,
     },
     include: { _count: { select: { groups: true } } },
   });
@@ -207,6 +233,9 @@ export async function configureSlot(
     slotAt?: string | null;
     windowMinutes?: number;
     registerLeadMinutes?: number;
+    centre?: string | null;
+    category?: string | null;
+    subCategory?: string | null;
   },
 ): Promise<SlotView | null> {
   const row = await prisma.slot.update({
@@ -225,6 +254,15 @@ export async function configureSlot(
         : {}),
       ...(input.registerLeadMinutes !== undefined
         ? { registerLeadMinutes: input.registerLeadMinutes }
+        : {}),
+      ...(input.centre !== undefined
+        ? { centre: input.centre?.trim() || null }
+        : {}),
+      ...(input.category !== undefined
+        ? { category: input.category?.trim() || null }
+        : {}),
+      ...(input.subCategory !== undefined
+        ? { subCategory: input.subCategory?.trim() || null }
         : {}),
     },
     include: { _count: { select: { groups: true } } },
@@ -425,12 +463,19 @@ export async function runSlotTick(id: number): Promise<SlotTickResult> {
     return { slot, checked: false, slotOpen: false, message: slot.lastMessage };
   }
 
-  // Slotni tekshiramiz.
-  const open = await checkSlotOpen();
-  if (!open.open) {
+  // Slotni tekshiramiz — kalendar sahifasini ochib, bo'sh kun bor-yo'qligini
+  // aniqlaymiz. Proxy yoqilgan bo'lsa rotating IP orqali o'tadi.
+  const cal = await detectCalendar({
+    slotId: id,
+    centre: current.centre,
+    category: current.category,
+    subCategory: current.subCategory,
+  });
+  if (!cal.open) {
     const slot = await patchSlot(id, {
       lastCheckAt: now,
-      lastMessage: `Slot yopiq: ${open.note}`,
+      lastMessage: `Kalendar yopiq: ${cal.note}`,
+      ...(cal.screenshotPath ? { lastShotPath: cal.screenshotPath } : {}),
     });
     return { slot, checked: true, slotOpen: false, message: slot.lastMessage };
   }
@@ -441,8 +486,10 @@ export async function runSlotTick(id: number): Promise<SlotTickResult> {
     active: false,
     openedAt: now,
     lastCheckAt: now,
+    ...(cal.screenshotPath ? { lastShotPath: cal.screenshotPath } : {}),
     lastMessage:
-      `Slot ochildi: ${queued.queuedJobs} user order navbatiga yuborildi ` +
+      `Kalendar ochildi (${cal.availableDates.length} bo'sh kun): ` +
+      `${queued.queuedJobs} user order navbatiga yuborildi ` +
       `(skip: ${queued.skippedJobs})`,
   });
   await logSlotEvent(id, "open", {
@@ -452,5 +499,69 @@ export async function runSlotTick(id: number): Promise<SlotTickResult> {
     groupsCount: queued.totalGroups,
     source: "system",
   });
+  // Bot adminlarga xabar bersin (fire-and-forget — asosiy oqimni bloklamaydi).
+  notifySlotOpen(slot, cal, queued.queuedJobs).catch(() => {});
   return { slot, checked: true, slotOpen: true, message: slot.lastMessage };
+}
+
+// Slot topilganda (success) adminlarga Telegram orqali xabar + skrinshot yuboradi.
+// .env: SLOT_NOTIFY_TELEGRAM=false bo'lsa o'chadi (default: yoqilgan).
+async function notifySlotOpen(
+  slot: SlotView,
+  cal: CalendarDetectResult,
+  queuedJobs: number,
+): Promise<void> {
+  const enabled =
+    (process.env.SLOT_NOTIFY_TELEGRAM || "true").trim().toLowerCase() !==
+    "false";
+  if (!enabled || !isTelegramConfigured()) return;
+
+  const chatIds = getAdminChatIds();
+  if (!chatIds.length) return;
+
+  const dir = slot.direction;
+  const datesPreview = cal.availableDates.slice(0, 8).join(", ");
+  const caption =
+    `✅ <b>SLOT OCHILDI!</b>\n` +
+    `🧭 ${dir.label}\n` +
+    `📋 Slot: <b>${escapeHtml(slot.name)}</b>\n` +
+    (slot.category ? `🏷 ${escapeHtml(slot.category)}\n` : "") +
+    (slot.subCategory ? `↳ ${escapeHtml(slot.subCategory)}\n` : "") +
+    `📅 Bo'sh kunlar: <b>${cal.availableDates.length}</b>` +
+    (datesPreview ? ` (${escapeHtml(datesPreview)})` : "") +
+    `\n🚀 Navbatga yuborildi: <b>${queuedJobs}</b> user` +
+    (cal.exitIp ? `\n🌐 IP: ${escapeHtml(cal.exitIp)}` : "");
+
+  // Skrinshot bo'lsa — rasm bilan, aks holda oddiy matn.
+  let shot: Buffer | null = null;
+  if (cal.screenshotPath) {
+    try {
+      shot = await fs.promises.readFile(cal.screenshotPath);
+    } catch {
+      shot = null;
+    }
+  }
+
+  for (const chatId of chatIds) {
+    try {
+      if (shot) {
+        await sendPhoto(chatId, {
+          buffer: shot,
+          filename: `slot-${slot.id}.png`,
+          caption,
+        });
+      } else {
+        await sendMessage(chatId, caption);
+      }
+    } catch {
+      // Bitta adminga yuborilmasa ham qolganlariga davom etamiz.
+    }
+  }
+}
+
+function escapeHtml(s: string): string {
+  return (s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }

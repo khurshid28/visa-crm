@@ -89,6 +89,10 @@ services:
       REDIS_URL: redis://redis:6379
       BOOKING_PROFILE_DIR: /profiles
       ORDER_WORKER_PREFETCH: 1
+      # CDP rejimi (Turnstile/Cloudflare) — real Google Chrome (Dockerfile o'rnatadi).
+      BOOKING_CHROME_CDP: "true"
+      BOOKING_CHROME_PATH: /usr/bin/google-chrome
+      BOOKING_HEADLESS: "true"
     volumes:
       - .:/app
       - app_node_modules:/app/node_modules
@@ -104,6 +108,44 @@ services:
         condition: service_started
     deploy:
       replicas: 10
+
+  # Kalendar monitoring job (alohida modul). Doim ishlaydi: har 10 minutda
+  # faol slotlarning appointment sahifasini ochib, bo'sh kun bor-yo'qligini
+  # aniqlaydi (PROXY_ENABLED=true bo'lsa rotating IP orqali). Bo'sh kun topilsa
+  # shu slot guruhlarini order navbatiga yuboradi. Bitta replica yetarli.
+  slot-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: visa-crm-slot-worker
+    command: npm run worker:slot
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: mysql://root:khurshid-2827@mysql:3306/visa_crm_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+      BOOKING_PROFILE_DIR: /profiles
+      SLOT_WORKER_INTERVAL_MS: 600000
+      # CDP rejimi (Turnstile/Cloudflare) — real Google Chrome (Dockerfile o'rnatadi).
+      BOOKING_CHROME_CDP: "true"
+      BOOKING_CHROME_PATH: /usr/bin/google-chrome
+      BOOKING_HEADLESS: "true"
+      # Slot-monitor token/sessiyasi doimiy volume'da saqlansin (qayta login kam).
+      SLOT_MONITOR_PROFILE_DIR: /profiles/slot-monitor
+    volumes:
+      - .:/app
+      - app_node_modules:/app/node_modules
+      - order_profiles:/profiles
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   mysql:
     image: mysql:8.0

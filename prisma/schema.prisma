@@ -308,11 +308,17 @@ model Slot {
   slotAt              DateTime? // belgilangan slot vaqti
   windowMinutes       Int       @default(10)
   registerLeadMinutes Int       @default(5)
+  // VFS appointment-detail sahifasidagi tanlovlar (kalendar tekshiruvi uchun).
+  // Bo'sh bo'lsa .env default (BOOKING_CALENDAR_*) ishlatiladi.
+  centre              String? // "Choose your Application Centre" (masalan: VFS GLOBAL SERVICES UBKN)
+  category            String? // "Choose your appointment category" (masalan: Latvia Long Stay/Visa D)
+  subCategory         String? // "Choose your sub-category" (masalan: Cargo drivers (Visa D) Uzbek, Turkmen)
   active              Boolean   @default(false)
   paused              Boolean   @default(false)
   lastCheckAt         DateTime? // oxirgi tekshiruv vaqti
   lastMessage         String    @default("Yaratildi")
   openedAt            DateTime? // joriy sessiyada slot ochiq topilgan vaqt
+  lastShotPath        String? // oxirgi tekshiruv skrinshoti (uploads/slot-monitor/...)
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   groups              Group[]

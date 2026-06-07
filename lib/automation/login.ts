@@ -36,7 +36,13 @@ import {
 export async function loginToBooking(
   email: string,
   password: string,
-  opts?: { profileKey?: string | null; onStep?: (msg: string) => void },
+  opts?: {
+    profileKey?: string | null;
+    onStep?: (msg: string) => void;
+    noProxy?: boolean;
+    cdpProfileBase?: string;
+    cdpFreshProfile?: boolean;
+  },
 ): Promise<LoginResult> {
   const step = (msg: string) => {
     try {
@@ -78,7 +84,7 @@ export async function loginToBooking(
       1,
       Number(process.env.BOOKING_PROXY_IP_RETRIES || "4"),
     );
-    const proxyOn = isProxyEnabled();
+    const proxyOn = isProxyEnabled() && !opts?.noProxy;
 
     // Login POST javobidan token'ni TUTIB OLAMIZ (eng ishonchli yo'l): VFS
     // /login bosilganda XHR javobida token JSON ichida keladi. Shu yerda
@@ -107,7 +113,11 @@ export async function loginToBooking(
 
       const session = await openBrowserContext(
         profileDirFor("login", profileKey),
-        { profileKey, ipAttempt: attempt },
+        { profileKey, ipAttempt: attempt, noProxy: opts?.noProxy },
+        {
+          cdpProfileBase: opts?.cdpProfileBase,
+          cdpFreshProfile: opts?.cdpFreshProfile,
+        },
       );
       closeSession = session.close;
       // Proxy trafigini tejash: og'ir resurslarni bloklaymiz.

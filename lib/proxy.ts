@@ -43,6 +43,12 @@ export type ProxyTarget = {
    * toza IP bilan qayta urinish uchun.
    */
   ipAttempt?: number;
+  /**
+   * true bo'lsa — PROXY_ENABLED yoqilgan bo'lsa ham proxy ISHLATILMAYDI
+   * (to'g'ridan-to'g'ri internet). Slot tekshiruvi kabi tez-tez (har 10 min)
+   * takrorlanadigan, lekin trafik tejash kerak bo'lgan holatlar uchun.
+   */
+  noProxy?: boolean;
 };
 
 /** profileKey'ni proxy session id uchun xavfsiz holatga keltiradi. */
@@ -94,6 +100,7 @@ function countries(): string[] {
  *  - aks holda      => undefined (proxy ishlatilmaydi).
  */
 export function proxyFor(target: ProxyTarget): ProxyConfig | undefined {
+  if (target.noProxy) return undefined;
   if (!isProxyEnabled()) return undefined;
 
   const host = (process.env.PROXY_HOST || "").trim();
@@ -145,6 +152,7 @@ export type ProxyMeta = {
 };
 
 export function proxyMetaFor(target: ProxyTarget): ProxyMeta | null {
+  if (target.noProxy) return null;
   if (!isProxyEnabled()) return null;
   const host = (process.env.PROXY_HOST || "").trim();
   const port = (process.env.PROXY_PORT || "").trim();

@@ -15,8 +15,8 @@
 import "dotenv/config";
 import { loginToBooking, type LoginResult } from "../lib/automation";
 
-const DEFAULT_EMAIL = "khurshidi2827@gmail.com";
-const DEFAULT_PASSWORD = "Khurshid2827@";
+const DEFAULT_EMAIL = "alpdiametr@gmail.com";
+const DEFAULT_PASSWORD = "Alpdiametr2827@";
 
 // ── Rang yordamchilari (LOG_COLOR=false bo'lsa o'chadi) ──
 const COLOR = (process.env.LOG_COLOR || "true").toLowerCase() !== "false";
