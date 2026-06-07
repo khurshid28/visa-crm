@@ -304,6 +304,42 @@ function copyDirSafe(src: string, dst: string): void {
 }
 
 /**
+ * Sessiyani tozalaydi, LEKIN HTTP cache'ni (Angular JS bundle) saqlaydi.
+ * Fresh rejimda har user toza bo'lishi kerak (cookie/login yo'q), lekin og'ir
+ * statik JS/CSS bundle qayta yuklanmasligi uchun Cache papkalari qoldiriladi.
+ * Faqat cookie/login/storage fayllarini o'chiradi.
+ */
+function clearSessionKeepCache(userDataDir: string): void {
+  if (!fs.existsSync(userDataDir)) return;
+  // O'chiriladigan sessiya artefaktlari (Default profil ichida va ildizda).
+  const sessionTargets = [
+    "Default/Cookies",
+    "Default/Cookies-journal",
+    "Default/Network/Cookies",
+    "Default/Network/Cookies-journal",
+    "Default/Login Data",
+    "Default/Login Data-journal",
+    "Default/Local Storage",
+    "Default/Session Storage",
+    "Default/IndexedDB",
+    "Default/Service Worker",
+    "Default/Sessions",
+    "Default/Web Data",
+    "Default/Web Data-journal",
+  ];
+  for (const rel of sessionTargets) {
+    try {
+      fs.rmSync(path.join(userDataDir, rel), {
+        recursive: true,
+        force: true,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
  * Haqiqiy Chrome User Data'dan tanlangan profilni vaqtinchalik papkaga nusxalaydi
  * (Local State + profil papkasi). Chrome ochiq bo'lsa ham ishlaydi. Natijada
  * Playwright shu nusxa orqali xuddi o'sha hisob (cookies/login) bilan ochadi.
@@ -460,11 +496,21 @@ async function connectRealChrome(opts?: {
       path.join(os.tmpdir(), "visa-cdp-profiles")
     ).trim();
     userDataDir = path.join(base, keySafe);
-    // Fresh rejimda (yoki qayta urinishda) eski profilni o'chirib yangidan
-    // boshlaymiz — buzilgan cookie/cache sahifa skriptlarini buzmasin.
+    // Fresh rejimda (yoki qayta urinishda) eski SESSIYANI tozalaymiz.
+    // TEZLIK: HTTP cache (Cache/Code Cache — Angular JS bundle shu yerda) ni
+    // SAQLAB qolamiz, faqat cookie/login/storage ni o'chiramiz. Shunda har user
+    // toza (cookie yo'q), lekin og'ir JS bundle qayta yuklanmaydi (~15-20s tejaydi).
+    // .env BOOKING_CDP_KEEP_CACHE=false bo'lsa — eski xulq (hammasi o'chadi).
+    const keepCache =
+      (process.env.BOOKING_CDP_KEEP_CACHE || "true").trim().toLowerCase() !==
+      "false";
     if (freshProfile || (opts?.attempt ?? 0) > 0) {
       try {
-        fs.rmSync(userDataDir, { recursive: true, force: true });
+        if (keepCache) {
+          clearSessionKeepCache(userDataDir);
+        } else {
+          fs.rmSync(userDataDir, { recursive: true, force: true });
+        }
       } catch {
         /* ignore */
       }
