@@ -377,8 +377,14 @@ export async function fillFieldReliably(
       await el.fill("", { timeout: 3000 }).catch(() => {});
       await page.keyboard.press("Control+A").catch(() => {});
       await page.keyboard.press("Delete").catch(() => {});
-      await el.type(value, { delay: rand(60, 140), timeout: 15000 });
-      await humanPause(120, 280);
+      // Inson kabi, lekin tezroq yozish (captcha baribir o'tadi). .env bilan
+      // sozlanadi: BOOKING_TYPE_DELAY_MS (default 35) — past=tezroq.
+      const typeBase = Number(process.env.BOOKING_TYPE_DELAY_MS || "35");
+      await el.type(value, {
+        delay: rand(typeBase, typeBase + 45),
+        timeout: 15000,
+      });
+      await humanPause(80, 180);
       const current = await el.inputValue().catch(() => "");
       if (current === value) return true;
     } catch {

@@ -306,7 +306,7 @@ export async function loginToBooking(
       .catch(() => {});
     // URL o'zgargach qisqa kutish — dashboard DOM/token o'rnashishi uchun
     // (networkidle butun sahifa yuklanishini kutadi, bizga shart emas).
-    await page.waitForTimeout(1200).catch(() => {});
+    await page.waitForTimeout(800).catch(() => {});
 
     base.finalUrl = page.url();
     const bodyText = (
