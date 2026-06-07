@@ -11,8 +11,14 @@ import {
 } from "iconsax-react";
 import { prisma } from "@/lib/prisma";
 import { APPLICANT_STATUS } from "@/lib/status";
-import { StatusDonut, GroupBars, LineChart } from "@/components/DashboardCharts";
+import {
+  StatusDonut,
+  GroupBars,
+  LineChart,
+  FunnelChart,
+} from "@/components/DashboardCharts";
 import StatusBadge from "@/components/StatusBadge";
+import PeriodFilter from "@/components/PeriodFilter";
 import { fmtDate } from "@/lib/date";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +34,17 @@ const STATUS_COLORS: Record<string, string> = {
   ARCHIVED: "#cbd5e1",
 };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: { days?: string };
+}) {
+  // Tanlangan davr (filter): 7 / 30 / 90 / 365 kun.
+  const allowed = [7, 30, 90, 365];
+  const days = allowed.includes(Number(searchParams.days))
+    ? Number(searchParams.days)
+    : 7;
+
   const [groupCount, applicantCount, booked, complete, byStatus] =
     await Promise.all([
       prisma.group.count(),
@@ -38,22 +54,23 @@ export default async function DashboardPage() {
       prisma.applicant.groupBy({ by: ["status"], _count: true }),
     ]);
 
-  // Bu hafta vs o'tgan hafta (trend foizi uchun).
+  // Tanlangan davr vs oldingi shu davr (trend foizi uchun).
   const now = new Date();
-  const weekAgo = new Date(now.getTime() - 7 * 86400000);
-  const twoWeeksAgo = new Date(now.getTime() - 14 * 86400000);
-  const [thisWeek, lastWeek] = await Promise.all([
-    prisma.applicant.count({ where: { createdAt: { gte: weekAgo } } }),
+  const periodMs = days * 86400000;
+  const periodAgo = new Date(now.getTime() - periodMs);
+  const twoPeriodsAgo = new Date(now.getTime() - 2 * periodMs);
+  const [thisPeriod, lastPeriod] = await Promise.all([
+    prisma.applicant.count({ where: { createdAt: { gte: periodAgo } } }),
     prisma.applicant.count({
-      where: { createdAt: { gte: twoWeeksAgo, lt: weekAgo } },
+      where: { createdAt: { gte: twoPeriodsAgo, lt: periodAgo } },
     }),
   ]);
-  const weekTrend =
-    lastWeek === 0
-      ? thisWeek > 0
+  const periodTrend =
+    lastPeriod === 0
+      ? thisPeriod > 0
         ? 100
         : 0
-      : Math.round(((thisWeek - lastWeek) / lastWeek) * 100);
+      : Math.round(((thisPeriod - lastPeriod) / lastPeriod) * 100);
 
   const completeRate =
     applicantCount > 0 ? Math.round((complete / applicantCount) * 100) : 0;
@@ -66,31 +83,41 @@ export default async function DashboardPage() {
     include: { _count: { select: { applicants: true } } },
   });
 
-  // So'nggi 7 kun: kunlik yangi arizachilar (line chart).
+  // Tanlangan davr bo'yicha kunlik yangi arizachilar (line chart).
+  // 7/30 kun — kunlik, 90/365 — haftalik/oylik guruhlash bilan ~12 nuqta.
   const since = new Date();
   since.setHours(0, 0, 0, 0);
-  since.setDate(since.getDate() - 6);
+  since.setDate(since.getDate() - (days - 1));
   const recentApplicants = await prisma.applicant.findMany({
     where: { createdAt: { gte: since } },
     select: { createdAt: true },
   });
-  const days: { key: string; label: string }[] = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(since);
-    d.setDate(since.getDate() + i);
-    days.push({
-      key: d.toISOString().slice(0, 10),
-      label: `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`,
+
+  // Nuqtalar sonini chiroyli ushlab turish uchun bucket o'lchami.
+  const bucketDays = days <= 30 ? 1 : days <= 90 ? 7 : 30;
+  const bucketCount = Math.ceil(days / bucketDays);
+  const buckets: { key: number; label: string; count: number }[] = [];
+  for (let i = 0; i < bucketCount; i++) {
+    const start = new Date(since);
+    start.setDate(since.getDate() + i * bucketDays);
+    buckets.push({
+      key: start.getTime(),
+      label:
+        bucketDays === 1
+          ? `${String(start.getDate()).padStart(2, "0")}.${String(start.getMonth() + 1).padStart(2, "0")}`
+          : `${String(start.getDate()).padStart(2, "0")}.${String(start.getMonth() + 1).padStart(2, "0")}`,
+      count: 0,
     });
   }
-  const dayCount: Record<string, number> = {};
-  for (const d of days) dayCount[d.key] = 0;
   for (const a of recentApplicants) {
-    const k = a.createdAt.toISOString().slice(0, 10);
-    if (k in dayCount) dayCount[k]++;
+    const diffDays = Math.floor(
+      (a.createdAt.getTime() - since.getTime()) / 86400000,
+    );
+    const idx = Math.floor(diffDays / bucketDays);
+    if (idx >= 0 && idx < buckets.length) buckets[idx].count++;
   }
-  const trendPoints = days.map((d) => dayCount[d.key]);
-  const trendLabels = days.map((d) => d.label);
+  const trendPoints = buckets.map((b) => b.count);
+  const trendLabels = buckets.map((b) => b.label);
 
   const donutData = byStatus.map((s) => ({
     label: APPLICANT_STATUS[s.status]?.label ?? s.status,
@@ -101,6 +128,28 @@ export default async function DashboardPage() {
   const barData = recent
     .slice(0, 6)
     .map((g) => ({ label: g.name, value: g._count.applicants }));
+
+  // Konversiya voronkasi: Jami -> To'liq -> Ro'yxatdan o'tgan -> Buyurtma -> Band.
+  const cnt = (st: string) =>
+    byStatus.find((s) => s.status === st)?._count ?? 0;
+  const registeredPlus = cnt("REGISTERED") + cnt("ORDERED") + cnt("BOOKED");
+  const orderedPlus = cnt("ORDERED") + cnt("BOOKED");
+  const funnelData = [
+    { label: "Jami arizachi", value: applicantCount, color: "#6366f1" },
+    { label: "To'liq ma'lumot", value: complete, color: "#0ea5e9" },
+    { label: "Ro'yxatdan o'tgan", value: registeredPlus, color: "#8b5cf6" },
+    { label: "Buyurtma berilgan", value: orderedPlus, color: "#a855f7" },
+    { label: "Band qilindi", value: cnt("BOOKED"), color: "#10b981" },
+  ];
+
+  const periodLabel =
+    days === 7
+      ? "7 kun"
+      : days === 30
+        ? "30 kun"
+        : days === 90
+          ? "90 kun"
+          : "1 yil";
 
   return (
     <div className="space-y-8">
@@ -113,10 +162,13 @@ export default async function DashboardPage() {
             Umumiy ko'rsatkichlar va so'nggi guruhlar
           </p>
         </div>
-        <span className="inline-flex items-center gap-2 rounded-xl bg-white px-3.5 py-2 text-sm font-medium text-slate-600 shadow-soft ring-1 ring-slate-100 dark:bg-slate-900/60 dark:text-slate-300 dark:ring-slate-800">
-          <Calendar size={16} variant="Bold" className="text-brand-500" />
-          {fmtDate(now)}
-        </span>
+        <div className="flex flex-wrap items-center gap-3">
+          <PeriodFilter value={String(days)} />
+          <span className="inline-flex items-center gap-2 rounded-xl bg-white px-3.5 py-2 text-sm font-medium text-slate-600 shadow-soft ring-1 ring-slate-100 dark:bg-slate-900/60 dark:text-slate-300 dark:ring-slate-800">
+            <Calendar size={16} variant="Bold" className="text-brand-500" />
+            {fmtDate(now)}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -132,8 +184,9 @@ export default async function DashboardPage() {
           value={applicantCount}
           icon={<People size={22} variant="Bold" />}
           tone="bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300"
-          trend={weekTrend}
-          trendLabel="o'tgan haftaga"
+          trend={periodTrend}
+          trendLabel={`oldingi ${periodLabel}ga`}
+          periodLabel={periodLabel}
         />
         <Stat
           label="To'liq ma'lumot"
@@ -161,23 +214,34 @@ export default async function DashboardPage() {
           <StatusDonut data={donutData} />
         </div>
         <div className="card">
+          <h2 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            Konversiya voronkasi
+          </h2>
+          <p className="mb-4 text-xs text-slate-400">
+            Jami → to'liq → ro'yxat → buyurtma → band
+          </p>
+          <FunnelChart data={funnelData} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="card">
+          <h2 className="mb-4 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            So'nggi {periodLabel} — yangi arizachilar
+          </h2>
+          <LineChart
+            labels={trendLabels}
+            series={[
+              { label: "Yangi arizachilar", color: "#6366f1", points: trendPoints },
+            ]}
+          />
+        </div>
+        <div className="card">
           <h2 className="mb-5 text-sm font-semibold text-slate-700 dark:text-slate-200">
             Guruhlar bo'yicha arizachilar
           </h2>
           <GroupBars data={barData} />
         </div>
-      </div>
-
-      <div className="card">
-        <h2 className="mb-4 text-sm font-semibold text-slate-700 dark:text-slate-200">
-          So'nggi 7 kun — yangi arizachilar
-        </h2>
-        <LineChart
-          labels={trendLabels}
-          series={[
-            { label: "Yangi arizachilar", color: "#6366f1", points: trendPoints },
-          ]}
-        />
       </div>
 
       <div className="card">
@@ -246,6 +310,7 @@ function Stat({
   trendLabel,
   progress,
   hint,
+  periodLabel,
 }: {
   label: string;
   value: number;
@@ -256,6 +321,7 @@ function Stat({
   trendLabel?: string;
   progress?: number;
   hint?: string;
+  periodLabel?: string;
 }) {
   const up = (trend ?? 0) >= 0;
   return (
@@ -314,7 +380,7 @@ function Stat({
 
       {trend !== undefined && trendLabel && (
         <p className="mt-3 text-[11px] text-slate-400">
-          So'nggi 7 kun · {trendLabel}
+          So'nggi {periodLabel ?? "7 kun"} · {trendLabel}
         </p>
       )}
 
