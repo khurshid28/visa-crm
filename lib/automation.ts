@@ -1167,21 +1167,47 @@ function extractRef(text: string): string | null {
 async function readExitIp(
   page: import("playwright").Page,
 ): Promise<string | null> {
+  const echo = proxyIpEchoUrl();
+  // MUHIM: CDP (connectOverCDP) rejimida page.request.get() chrome'ning
+  // --proxy-server flagini CHETLAB O'TADI (Node tarmog'idan ketadi) va HAQIQIY
+  // IP'ni qaytaradi. Shu sababli IP'ni SAHIFA ICHIDAGI fetch orqali olamiz —
+  // u chrome proxy'sidan o'tadi va to'g'ri exit IP'ni beradi.
   try {
-    const res = await page.request.get(proxyIpEchoUrl(), { timeout: 8000 });
-    const txt = (await res.text()).trim();
-    try {
-      const j = JSON.parse(txt);
-      const ip = j.ip || j.query || j.YourFuckingIPAddress || null;
-      if (ip) return String(ip).slice(0, 60);
-    } catch {
-      /* JSON emas — xom matn */
-    }
-    const m = txt.match(/(\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{6,}/);
-    return m ? m[0].slice(0, 60) : null;
+    const txt = await page.evaluate(async (u: string) => {
+      try {
+        const r = await fetch(u, { cache: "no-store" });
+        return await r.text();
+      } catch {
+        return "";
+      }
+    }, echo);
+    const parsed = parseIpFromText(txt);
+    if (parsed) return parsed;
+  } catch {
+    /* in-page fetch ishlamadi — pastdagi zaxira usulga o'tamiz */
+  }
+  // Zaxira: page.request (CDP'da proxy'ni chetlab o'tishi mumkin — faqat oxirgi chora).
+  try {
+    const res = await page.request.get(echo, { timeout: 8000 });
+    return parseIpFromText((await res.text()).trim());
   } catch {
     return null;
   }
+}
+
+/** Echo javobidan (JSON yoki xom matn) IP manzilni ajratadi. */
+function parseIpFromText(txt: string): string | null {
+  const t = (txt || "").trim();
+  if (!t) return null;
+  try {
+    const j = JSON.parse(t);
+    const ip = j.ip || j.query || j.YourFuckingIPAddress || null;
+    if (ip) return String(ip).slice(0, 60);
+  } catch {
+    /* JSON emas — xom matn */
+  }
+  const m = t.match(/(\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{6,}/);
+  return m ? m[0].slice(0, 60) : null;
 }
 
 /**
