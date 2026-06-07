@@ -45,6 +45,7 @@ export function launchArgs(): string[] {
 // .env: BOOKING_BLOCK_RESOURCES=false bo'lsa o'chadi (default: yoqilgan).
 const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font"]);
 const BLOCKED_URL_PATTERNS = [
+  // --- Analytics / tracking (login uchun keraksiz, og'ir) ---
   "google-analytics.com",
   "googletagmanager.com",
   "doubleclick.net",
@@ -55,12 +56,25 @@ const BLOCKED_URL_PATTERNS = [
   "bat.bing.com",
   "yandex.ru/metrika",
   "mc.yandex",
+  // Dynatrace RUM monitoring (VFS sahifasidagi og'ir tracking agent ~100KB+).
+  "dynatrace.com",
+  "dynatracelabs.com",
+  "js-cdn.dynatrace",
+  "ruxitagent",
+  // OneTrust cookie banner SDK (3 ta JS + logo). Banner kerak emas — login
+  // funksiyasiga ta'sir qilmaydi, faqat overlay'ni yo'qotadi (Sign In to'silmaydi).
+  "cookielaw.org",
+  "onetrust.com",
+  "cookiepro.com",
+  // --- Shriftlar (ikonlar/typography — login uchun shart emas) ---
   "fonts.gstatic.com",
   "fonts.googleapis.com",
+  "font-awesome",
   ".woff",
   ".woff2",
   ".ttf",
   ".otf",
+  // --- Media / rasmlar ---
   ".mp4",
   ".webm",
   ".png",
