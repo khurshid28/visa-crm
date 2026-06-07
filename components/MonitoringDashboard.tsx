@@ -6,6 +6,8 @@ import {
   GroupBars,
   LineChart,
   GroupedBars,
+  FunnelChart,
+  StackedBars,
 } from "@/components/DashboardCharts";
 import { fmtDateTime } from "@/lib/date";
 
@@ -64,6 +66,48 @@ type MonitoringData = {
   };
   failed: number;
   logs: LogRow[];
+  funnel: { label: string; value: number; color: string }[];
+  hourly: { labels: string[]; ok: number[]; fail: number[] };
+  proxyStats: {
+    country: string;
+    total: number;
+    ok: number;
+    fail: number;
+    successRate: number;
+    avgNavMs: number;
+    avgDurationMs: number;
+  }[];
+  statusCodes: { code: number; count: number }[];
+  groups: {
+    id: number;
+    name: string;
+    fromCountry: string | null;
+    toCountry: string | null;
+    total: number;
+    registered: number;
+    booked: number;
+    failed: number;
+    successRate: number;
+  }[];
+  slowest: {
+    id: number;
+    name: string;
+    stage: string;
+    durationMs: number;
+    ok: boolean;
+    createdAt: string;
+  }[];
+  errors: {
+    id: number;
+    name: string;
+    stage: string;
+    attempt: number;
+    note: string;
+    statusCode: number | null;
+    createdAt: string;
+  }[];
+  exitIpCount: number;
+  nav: { avgMs: number; maxMs: number };
   updatedAt: string;
 };
 function ms(n: number) {
@@ -181,6 +225,22 @@ export default function MonitoringDashboard() {
         </div>
       </div>
 
+      {/* Konversiya voronkasi + 24h faollik */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="card">
+          <h2 className="mb-1 text-sm font-semibold text-slate-700">Konversiya voronkasi</h2>
+          <p className="mb-4 text-xs text-slate-400">
+            Jami → ro&apos;yxat → buyurtma → band (har bosqich oldingisiga nisbatan %)
+          </p>
+          <FunnelChart data={data.funnel} />
+        </div>
+        <div className="card">
+          <h2 className="mb-1 text-sm font-semibold text-slate-700">So&apos;nggi 24 soat faollik</h2>
+          <p className="mb-4 text-xs text-slate-400">Soatlik urinishlar (✓ / ✕)</p>
+          <StackedBars labels={data.hourly.labels} ok={data.hourly.ok} fail={data.hourly.fail} />
+        </div>
+      </div>
+
       {/* Line: 7 kunlik faollik */}
       <div className="card">
         <h2 className="mb-4 text-sm font-semibold text-slate-700">
@@ -243,6 +303,193 @@ export default function MonitoringDashboard() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <TimingCard title="Register vaqti" t={data.timing.register} />
         <TimingCard title="Buyurtma (order) vaqti" t={data.timing.order} />
+      </div>
+
+      {/* Proxy samaradorligi + HTTP status kodlari */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="card">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-700">Proxy samaradorligi (davlat)</h2>
+            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+              {data.exitIpCount} ta unikal IP
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
+                  <th className="py-2 pr-3">Davlat</th>
+                  <th className="py-2 pr-3">Jami</th>
+                  <th className="py-2 pr-3">Muvaffaqiyat</th>
+                  <th className="py-2 pr-3">O&apos;rt. ochilish</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.proxyStats.map((p) => (
+                  <tr key={p.country} className="border-b border-slate-50">
+                    <td className="py-2 pr-3 font-medium text-slate-700">{p.country}</td>
+                    <td className="py-2 pr-3 text-slate-600">{p.total}</td>
+                    <td className="py-2 pr-3">
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+                          <div
+                            className="h-full rounded-full bg-emerald-500"
+                            style={{ width: `${p.successRate}%` }}
+                          />
+                        </div>
+                        <span className="tabular-nums text-xs text-slate-500">{p.successRate}%</span>
+                      </div>
+                    </td>
+                    <td className="py-2 pr-3 text-slate-600">{ms(p.avgNavMs)}</td>
+                  </tr>
+                ))}
+                {data.proxyStats.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="py-6 text-center text-sm text-slate-400">
+                      Proxy ma&apos;lumoti yo&apos;q
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="card">
+          <h2 className="mb-4 text-sm font-semibold text-slate-700">HTTP status kodlari</h2>
+          <GroupBars
+            data={data.statusCodes.map((s) => ({
+              label: String(s.code),
+              value: s.count,
+            }))}
+          />
+        </div>
+      </div>
+
+      {/* Guruhlar kesimi */}
+      <div className="card">
+        <h2 className="mb-4 text-sm font-semibold text-slate-700">Guruhlar bo&apos;yicha kesim</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
+                <th className="py-2 pr-3">Guruh</th>
+                <th className="py-2 pr-3">Jami</th>
+                <th className="py-2 pr-3">Ro&apos;yxatda</th>
+                <th className="py-2 pr-3">Band</th>
+                <th className="py-2 pr-3">Xato</th>
+                <th className="py-2 pr-3">Muvaffaqiyat</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.groups.map((g) => (
+                <tr key={g.id} className="border-b border-slate-50">
+                  <td className="py-2 pr-3 font-medium text-slate-700">{g.name}</td>
+                  <td className="py-2 pr-3 text-slate-600">{g.total}</td>
+                  <td className="py-2 pr-3 text-indigo-600">{g.registered}</td>
+                  <td className="py-2 pr-3 text-emerald-600">{g.booked}</td>
+                  <td className="py-2 pr-3 text-rose-600">{g.failed}</td>
+                  <td className="py-2 pr-3">
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full bg-emerald-500"
+                          style={{ width: `${g.successRate}%` }}
+                        />
+                      </div>
+                      <span className="tabular-nums text-xs text-slate-500">{g.successRate}%</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {data.groups.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-6 text-center text-sm text-slate-400">
+                    Hali guruh yo&apos;q
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Eng sekin + xatolar */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="card">
+          <h2 className="mb-4 text-sm font-semibold text-slate-700">Eng sekin operatsiyalar</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
+                  <th className="py-2 pr-3">User</th>
+                  <th className="py-2 pr-3">Bosqich</th>
+                  <th className="py-2 pr-3">Vaqt</th>
+                  <th className="py-2 pr-3">Natija</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.slowest.map((s) => (
+                  <tr key={s.id} className="border-b border-slate-50">
+                    <td className="py-2 pr-3 font-medium text-slate-700">{s.name}</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{s.stage}</span>
+                    </td>
+                    <td className="py-2 pr-3 font-semibold text-amber-600">{ms(s.durationMs)}</td>
+                    <td className="py-2 pr-3">
+                      <span className={s.ok ? "text-emerald-600" : "text-rose-600"}>
+                        {s.ok ? "✓" : "✕"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {data.slowest.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="py-6 text-center text-sm text-slate-400">
+                      Ma&apos;lumot yo&apos;q
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="card">
+          <h2 className="mb-4 text-sm font-semibold text-slate-700">So&apos;nggi xatolar</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-left text-xs text-slate-400">
+                  <th className="py-2 pr-3">Vaqt</th>
+                  <th className="py-2 pr-3">User</th>
+                  <th className="py-2 pr-3">Bosqich</th>
+                  <th className="py-2 pr-3">Izoh</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.errors.map((e) => (
+                  <tr key={e.id} className="border-b border-slate-50 align-top">
+                    <td className="py-2 pr-3 whitespace-nowrap text-xs text-slate-400">{timeAgo(e.createdAt)}</td>
+                    <td className="py-2 pr-3 font-medium text-slate-700">{e.name}</td>
+                    <td className="py-2 pr-3">
+                      <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-xs text-rose-600">
+                        {e.stage}
+                        {e.statusCode ? ` ${e.statusCode}` : ""}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 max-w-[14rem] truncate text-xs text-slate-500" title={e.note}>{e.note || "—"}</td>
+                  </tr>
+                ))}
+                {data.errors.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="py-6 text-center text-sm text-slate-400">
+                      Xato yo&apos;q 🎉
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       {/* Loglar */}

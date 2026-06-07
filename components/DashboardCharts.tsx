@@ -418,3 +418,104 @@ export function GroupedBars({
     </div>
   );
 }
+
+// ------------------------------- Funnel chart --------------------------------
+
+export type FunnelStep = { label: string; value: number; color: string };
+
+export function FunnelChart({ data }: { data: FunnelStep[] }) {
+  const top = Math.max(1, data[0]?.value ?? 1);
+  return (
+    <div className="space-y-2.5">
+      {data.map((d, i) => {
+        const pctOfTop = (d.value / top) * 100;
+        const prev = i === 0 ? d.value : data[i - 1].value;
+        const conv = prev > 0 ? Math.round((d.value / prev) * 100) : 0;
+        return (
+          <div key={d.label} className="flex items-center gap-3">
+            <span className="w-36 shrink-0 truncate text-sm text-slate-600 dark:text-slate-300">
+              {d.label}
+            </span>
+            <div className="relative h-8 flex-1 overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-800">
+              <div
+                className="flex h-full items-center justify-end rounded-lg px-2"
+                style={{
+                  width: `${Math.max(pctOfTop, 6)}%`,
+                  background: `linear-gradient(90deg, ${d.color}cc, ${d.color})`,
+                  transition: "width .7s cubic-bezier(.4,0,.2,1)",
+                }}
+              >
+                <span className="text-xs font-bold text-white drop-shadow">
+                  {d.value}
+                </span>
+              </div>
+            </div>
+            <span className="w-12 shrink-0 text-right text-xs font-medium text-slate-400 tabular-nums">
+              {i === 0 ? "—" : `${conv}%`}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ----------------------------- Stacked hour bars -----------------------------
+
+export function StackedBars({
+  labels,
+  ok,
+  fail,
+  height = 160,
+}: {
+  labels: string[];
+  ok: number[];
+  fail: number[];
+  height?: number;
+}) {
+  const max = Math.max(1, ...labels.map((_, i) => (ok[i] ?? 0) + (fail[i] ?? 0)));
+  return (
+    <div>
+      <div className="flex items-end gap-[3px]" style={{ height }}>
+        {labels.map((l, i) => {
+          const o = ok[i] ?? 0;
+          const f = fail[i] ?? 0;
+          const total = o + f;
+          return (
+            <div
+              key={i}
+              className="group relative flex flex-1 flex-col justify-end"
+              style={{ height: "100%" }}
+              title={`${l} — ✓ ${o} / ✕ ${f}`}
+            >
+              <div
+                className="w-full rounded-t-sm bg-rose-400"
+                style={{ height: `${(f / max) * 100}%` }}
+              />
+              <div
+                className="w-full bg-emerald-400"
+                style={{ height: `${(o / max) * 100}%` }}
+              />
+              <span className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-white opacity-0 group-hover:opacity-100">
+                {total}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-1.5 flex justify-between text-[9px] text-slate-400">
+        {labels.map((l, i) =>
+          i % 3 === 0 ? <span key={i}>{l}</span> : <span key={i} className="w-0" />,
+        )}
+      </div>
+      <div className="mt-2 flex items-center gap-4 text-xs text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" /> Muvaffaqiyatli
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-rose-400" /> Xato
+        </span>
+      </div>
+    </div>
+  );
+}

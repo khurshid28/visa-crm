@@ -1,0 +1,28 @@
+// ====================================================================
+//  AVTOMATLASHTIRISH — public API (barrel)
+// ====================================================================
+//  Eski `import { ... } from "@/lib/automation"` chaqiruvlari shu yerga keladi.
+//  Kod modullarga bo'lingan:
+//   - types.ts      — umumiy tiplar
+//   - human.ts      — inson kabi kutish (rand, humanPause)
+//   - browser.ts    — brauzer/context/proxy/CDP/profil
+//   - page-utils.ts — sahifa yordamchilari (forma, cookie, Turnstile, token, IP)
+//   - login.ts      — loginToBooking
+//   - booking.ts    — runBooking (register/order)
+//   - activation.ts — runActivation
+//   - slot.ts       — checkSlotOpen
+// ====================================================================
+
+export type {
+  AutomationApplicant,
+  AutomationResult,
+  ActivationResult,
+  SlotCheckResult,
+  LoginResult,
+} from "./types";
+
+export { sanitizeProfileKey } from "./browser";
+export { loginToBooking } from "./login";
+export { runBooking } from "./booking";
+export { runActivation } from "./activation";
+export { checkSlotOpen } from "./slot";

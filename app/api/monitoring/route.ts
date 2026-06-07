@@ -18,6 +18,8 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export async function GET() {
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
   const [
     workers,
     queueDepth,
@@ -28,6 +30,17 @@ export async function GET() {
     recentLogs,
     failed,
     activationByStatus,
+    totalApplicants,
+    byGroupStatus,
+    groupRows,
+    proxyByCountry,
+    proxyOk,
+    statusCodeRows,
+    distinctExitIps,
+    slowestLogs,
+    errorLogs,
+    hourlyLogs,
+    navAgg,
   ] = await Promise.all([
     getWorkersStatus(),
     getQueueDepth(),
@@ -59,6 +72,57 @@ export async function GET() {
     }),
     prisma.applicant.count({ where: { status: "FAILED" } }),
     prisma.applicant.groupBy({ by: ["activationStatus"], _count: true }),
+    prisma.applicant.count(),
+    prisma.applicant.groupBy({ by: ["groupId", "status"], _count: true }),
+    prisma.group.findMany({
+      select: {
+        id: true,
+        name: true,
+        slot: { select: { fromCountry: true, toCountry: true } },
+      },
+    }),
+    prisma.automationLog.groupBy({
+      by: ["proxyCountry"],
+      _count: true,
+      _avg: { navMs: true, durationMs: true },
+      where: { proxyCountry: { not: null } },
+    }),
+    prisma.automationLog.groupBy({
+      by: ["proxyCountry", "ok"],
+      _count: true,
+      where: { proxyCountry: { not: null } },
+    }),
+    prisma.automationLog.groupBy({
+      by: ["statusCode"],
+      _count: true,
+      where: { statusCode: { not: null } },
+    }),
+    prisma.automationLog.findMany({
+      where: { exitIp: { not: null } },
+      select: { exitIp: true },
+      distinct: ["exitIp"],
+    }),
+    prisma.automationLog.findMany({
+      where: { durationMs: { gt: 0 } },
+      orderBy: { durationMs: "desc" },
+      take: 10,
+      include: { applicant: { select: { surname: true, name: true } } },
+    }),
+    prisma.automationLog.findMany({
+      where: { ok: false },
+      orderBy: { createdAt: "desc" },
+      take: 15,
+      include: { applicant: { select: { surname: true, name: true } } },
+    }),
+    prisma.automationLog.findMany({
+      where: { createdAt: { gte: dayAgo } },
+      select: { stage: true, ok: true, createdAt: true },
+    }),
+    prisma.automationLog.aggregate({
+      _avg: { navMs: true },
+      _max: { navMs: true },
+      where: { navMs: { not: null, gt: 0 } },
+    }),
   ]);
 
   // So'nggi 7 kun bo'yicha kunlik vaqt qatori (line chart uchun).
@@ -122,10 +186,143 @@ export async function GET() {
   const stage = (st: string, ok: boolean) =>
     logStage.find((l) => l.stage === st && l.ok === ok)?._count ?? 0;
 
+  // ---- Konversiya voronkasi (funnel): NEW -> REGISTERED -> ORDERED -> BOOKED
+  const cnt = (st: string) =>
+    byStatus.find((s) => s.status === st)?._count ?? 0;
+  const registeredPlus = cnt("REGISTERED") + cnt("ORDERED") + cnt("BOOKED");
+  const orderedPlus = cnt("ORDERED") + cnt("BOOKED");
+  const funnel = [
+    { label: "Jami arizachi", value: totalApplicants, color: "#6366f1" },
+    { label: "Ro'yxatdan o'tgan", value: registeredPlus, color: "#0ea5e9" },
+    { label: "Buyurtma berilgan", value: orderedPlus, color: "#8b5cf6" },
+    { label: "Band qilindi", value: cnt("BOOKED"), color: "#10b981" },
+  ];
+
+  // ---- So'nggi 24 soat — soatlik faollik
+  const hourLabels: string[] = [];
+  const hourKeys: string[] = [];
+  const hb: Record<string, { ok: number; fail: number }> = {};
+  for (let i = 23; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 60 * 60 * 1000);
+    const key = `${d.toISOString().slice(0, 13)}`;
+    hourKeys.push(key);
+    hb[key] = { ok: 0, fail: 0 };
+    hourLabels.push(`${String(d.getHours()).padStart(2, "0")}:00`);
+  }
+  for (const l of hourlyLogs) {
+    const key = l.createdAt.toISOString().slice(0, 13);
+    const b = hb[key];
+    if (!b) continue;
+    if (l.ok) b.ok++;
+    else b.fail++;
+  }
+  const hourly = {
+    labels: hourLabels,
+    ok: hourKeys.map((k) => hb[k].ok),
+    fail: hourKeys.map((k) => hb[k].fail),
+  };
+
+  // ---- Proxy (davlat) bo'yicha samaradorlik
+  const proxyOkMap = new Map<string, { ok: number; fail: number }>();
+  for (const r of proxyOk) {
+    const c = r.proxyCountry ?? "?";
+    const m = proxyOkMap.get(c) ?? { ok: 0, fail: 0 };
+    if (r.ok) m.ok += r._count;
+    else m.fail += r._count;
+    proxyOkMap.set(c, m);
+  }
+  const proxyStats = proxyByCountry
+    .map((p) => {
+      const c = (p.proxyCountry ?? "?").toUpperCase();
+      const okm = proxyOkMap.get(p.proxyCountry ?? "?") ?? { ok: 0, fail: 0 };
+      const total = okm.ok + okm.fail;
+      return {
+        country: c,
+        total,
+        ok: okm.ok,
+        fail: okm.fail,
+        successRate: total ? Math.round((okm.ok / total) * 100) : 0,
+        avgNavMs: Math.round(p._avg.navMs ?? 0),
+        avgDurationMs: Math.round(p._avg.durationMs ?? 0),
+      };
+    })
+    .sort((a, b) => b.total - a.total);
+
+  // ---- HTTP status kodlari taqsimoti
+  const statusCodes = statusCodeRows
+    .map((r) => ({ code: r.statusCode ?? 0, count: r._count }))
+    .sort((a, b) => b.count - a.count);
+
+  // ---- Guruhlar bo'yicha kesim (status breakdown + success rate)
+  const gMap = new Map<
+    number,
+    { total: number; booked: number; failed: number; registered: number }
+  >();
+  for (const r of byGroupStatus) {
+    const m = gMap.get(r.groupId) ?? {
+      total: 0,
+      booked: 0,
+      failed: 0,
+      registered: 0,
+    };
+    m.total += r._count;
+    if (r.status === "BOOKED") m.booked += r._count;
+    if (r.status === "FAILED") m.failed += r._count;
+    if (
+      r.status === "REGISTERED" ||
+      r.status === "ORDERED" ||
+      r.status === "BOOKED"
+    )
+      m.registered += r._count;
+    gMap.set(r.groupId, m);
+  }
+  const groups = groupRows
+    .map((g) => {
+      const m = gMap.get(g.id) ?? {
+        total: 0,
+        booked: 0,
+        failed: 0,
+        registered: 0,
+      };
+      return {
+        id: g.id,
+        name: g.name,
+        fromCountry: g.slot?.fromCountry ?? null,
+        toCountry: g.slot?.toCountry ?? null,
+        total: m.total,
+        registered: m.registered,
+        booked: m.booked,
+        failed: m.failed,
+        successRate: m.total ? Math.round((m.booked / m.total) * 100) : 0,
+      };
+    })
+    .filter((g) => g.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  const slowest = slowestLogs.map((l) => ({
+    id: l.id,
+    name: l.applicant
+      ? `${l.applicant.surname} ${l.applicant.name}`
+      : `#${l.applicantId ?? "-"}`,
+    stage: l.stage,
+    durationMs: l.durationMs,
+    ok: l.ok,
+    createdAt: l.createdAt.toISOString(),
+  }));
+
+  const errors = errorLogs.map((l) => ({
+    id: l.id,
+    name: l.applicant
+      ? `${l.applicant.surname} ${l.applicant.name}`
+      : `#${l.applicantId ?? "-"}`,
+    stage: l.stage,
+    attempt: l.attempt,
+    note: l.note ?? "",
+    statusCode: l.statusCode ?? null,
+    createdAt: l.createdAt.toISOString(),
+  }));
+
   return NextResponse.json({
-    workers,
-    queueDepth,
-    statusData,
     timing: {
       register: {
         avgMs: Math.round(regAgg._avg.registerDurationMs ?? 0),
@@ -181,6 +378,18 @@ export async function GET() {
       workerProfile: l.workerProfile ?? "",
       createdAt: l.createdAt.toISOString(),
     })),
+    funnel,
+    hourly,
+    proxyStats,
+    statusCodes,
+    groups,
+    slowest,
+    errors,
+    exitIpCount: distinctExitIps.length,
+    nav: {
+      avgMs: Math.round(navAgg._avg.navMs ?? 0),
+      maxMs: navAgg._max.navMs ?? 0,
+    },
     updatedAt: new Date().toISOString(),
   });
 }
