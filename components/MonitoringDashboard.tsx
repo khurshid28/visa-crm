@@ -152,7 +152,8 @@ export default function MonitoringDashboard() {
     );
   }
 
-  const busy = data.workers.filter((w) => w.status === "busy").length;
+  const workers = data.workers ?? [];
+  const busy = workers.filter((w) => w.status === "busy").length;
   const stageBars = [
     { label: "Register ✓", value: data.stageStats.registerOk },
     { label: "Register ✕", value: data.stageStats.registerFail },
@@ -167,7 +168,7 @@ export default function MonitoringDashboard() {
       {/* Stat kartalar */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
         <MetricCard label="Navbatdagi joblar" value={data.queueDepth} tone="bg-amber-50 text-amber-600" />
-        <MetricCard label="Band worker" value={`${busy}/${data.workers.length}`} tone="bg-indigo-50 text-indigo-600" />
+        <MetricCard label="Band worker" value={`${busy}/${workers.length}`} tone="bg-indigo-50 text-indigo-600" />
         <MetricCard label="Aktivatsiya ✓" value={data.activation.activated} tone="bg-emerald-50 text-emerald-600" />
         <MetricCard label="Aktivatsiya kutilmoqda" value={data.activation.pending} tone="bg-sky-50 text-sky-600" />
         <MetricCard label="Bo'lmadi (FAILED)" value={data.failed} tone="bg-rose-50 text-rose-600" />
@@ -180,11 +181,11 @@ export default function MonitoringDashboard() {
           <h2 className="text-sm font-semibold text-slate-700">Workerlar (Playwright)</h2>
           <span className="text-xs text-slate-400">yangilangan: {timeAgo(data.updatedAt)}</span>
         </div>
-        {data.workers.length === 0 ? (
+        {workers.length === 0 ? (
           <p className="text-sm text-slate-400">Hozircha faol worker yo'q (docker compose up bilan ishga tushiring).</p>
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            {data.workers.map((w) => (
+            {workers.map((w) => (
               <div
                 key={w.profile}
                 className={`rounded-xl border p-3 ${

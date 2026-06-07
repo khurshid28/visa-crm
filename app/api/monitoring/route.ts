@@ -323,6 +323,9 @@ export async function GET() {
   }));
 
   return NextResponse.json({
+    workers,
+    queueDepth,
+    statusData,
     timing: {
       register: {
         avgMs: Math.round(regAgg._avg.registerDurationMs ?? 0),
