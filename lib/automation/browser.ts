@@ -56,6 +56,10 @@ const BLOCKED_URL_PATTERNS = [
   "bat.bing.com",
   "yandex.ru/metrika",
   "mc.yandex",
+  // Cloudflare Insights / Web Analytics beacon (challenge EMAS — analytics).
+  // DIQQAT: challenges.cloudflare.com (Turnstile) bloklanMAYDI, faqat insights.
+  "cloudflareinsights.com",
+  "static.cloudflareinsights",
   // Dynatrace RUM monitoring (VFS sahifasidagi og'ir tracking agent ~100KB+).
   "dynatrace.com",
   "dynatracelabs.com",
