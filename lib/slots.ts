@@ -564,12 +564,12 @@ async function notifySlotCheck(
     statusLine = "🔒 <b>Login bo'lmadi</b>";
   } else if (note.includes("500") || note.includes("server xatosi")) {
     statusLine = "🛑 <b>VFS server xatosi (500) — qayta urinish</b>";
-  } else if (note.includes("tugagan")) {
-    statusLine = "🟡 <b>Slot ochildi, lekin bo'sh slot TUGAGAN</b>";
+  } else if (note.includes("qolmadi") || note.includes("tugagan")) {
+    statusLine = "🟡 <b>Slot qolmadi — bo'sh slotlar band qilingan</b>";
   } else if (note.includes("aniqlanmadi") || note.includes("yuklanmadi")) {
     statusLine = "⚠️ <b>Tekshiruv bajarilmadi (sahifa yuklanmadi)</b>";
   } else {
-    statusLine = "⛔ <b>Slot ochiq emas — bo'sh slot yo'q</b>";
+    statusLine = "⛔ <b>Slot ochiq emas</b>";
   }
   const caption =
     `🔎 <b>SLOT TEKSHIRUVI</b>\n` +

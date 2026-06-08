@@ -1068,25 +1068,25 @@ export async function detectCalendar(
       };
     }
 
-    // ── 2) SLOT OCHIQ EMAS — VFS "bo'sh slot yo'q" xabari ────────────────────
+    // ── 2) SLOT OCHIQ EMAS — VFS xabari (slot umuman ochilmagan) ────────────
     // VFS aniq "no appointment slots currently available" deydi (Continue o'chiq).
     if (avail.noSlot) {
       return {
         ...base,
         open: false,
-        note: "Slot ochiq EMAS — bo'sh slot yo'q (VFS xabari)",
+        note: "Slot ochiq EMAS (VFS xabari)",
       };
     }
 
-    // ── 3) SLOT OCHILGAN, LEKIN BO'SH SLOT TUGAGAN ──────────────────────────
-    // Kalendar/sana tanlagich KO'RINADI, ammo tanlanadigan bo'sh kun yo'q va
-    // Continue ham o'chiq. Demak slot ochilgan edi, lekin bo'sh o'rinlar band
-    // qilib bo'lingan (tugagan).
+    // ── 3) SLOT QOLMADI — kalendar bor, lekin bo'sh slot soni = 0 ───────────
+    // Kalendar/sana tanlagich KO'RINADI (slot bo'limi ochilgan), ammo
+    // tanlanadigan bo'sh kun YO'Q (soni 0) va Continue ham o'chiq. Demak slot
+    // ochilgan edi, lekin barcha bo'sh o'rinlar band qilib bo'lingan = QOLMADI.
     if (avail.calendarFound) {
       return {
         ...base,
         open: false,
-        note: "Slot ochilgan, lekin bo'sh slot TUGAGAN (kalendar bor, bo'sh kun yo'q)",
+        note: "Slot qolmadi — bo'sh slotlar band qilingan (slot soni: 0)",
       };
     }
 

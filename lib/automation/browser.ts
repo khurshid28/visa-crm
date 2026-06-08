@@ -258,8 +258,7 @@ async function applyStealthInit(
         // har safar 2-3s animatsiya qiladi va Playwright uni kutadi (behuda vaqt).
         // Global `scroll-behavior: auto` bilan barcha scroll BIR ZUMDA bo'ladi.
         const s = document.createElement("style");
-        s.textContent =
-          "html,body,*{scroll-behavior:auto !important}";
+        s.textContent = "html,body,*{scroll-behavior:auto !important}";
         (document.documentElement || document.head)?.appendChild(s);
       } catch {
         /* ignore */

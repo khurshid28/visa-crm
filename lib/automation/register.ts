@@ -52,6 +52,75 @@ function splitPhone(
 }
 
 /**
+ * VFS S3/CloudFront ba'zan TOZA profilda sahifani topa olmay "NoSuchKey" 404
+ * qaytaradi (one-pager/bookappointment/bookappointment.htm). Bu FLAKY — bir
+ * necha marta qayta yuklasak (CloudFront origin'i "qiziydi") 2-3-urinishda
+ * haqiqiy SPA keladi. Shuning uchun 404/NoSuchKey bo'lsa qayta yuklaymiz.
+ * { response, gotoError, statusCode, noSuchKey } qaytaradi (throw qilmaydi).
+ */
+async function loadWithHealing(
+  p: Page,
+  targetUrl: string,
+  step: (m: string) => void,
+  pageErrors: string[],
+  opts: {
+    waitUntil: "commit" | "domcontentloaded";
+    maxReloads: number;
+    label: string;
+  },
+): Promise<{
+  response: import("playwright").Response | null;
+  gotoError: boolean;
+  statusCode: number | null;
+  noSuchKey: boolean;
+}> {
+  let response: import("playwright").Response | null = null;
+  let gotoError = false;
+  let statusCode: number | null = null;
+  let noSuchKey = false;
+  for (let load = 0; load <= opts.maxReloads; load++) {
+    gotoError = false;
+    try {
+      response = await p.goto(targetUrl, {
+        waitUntil: opts.waitUntil,
+        timeout: 45000,
+      });
+    } catch (e) {
+      gotoError = true;
+      const m = e instanceof Error ? e.message : String(e);
+      pageErrors.push(`goto(${opts.label}): ${m}`.slice(0, 200));
+      break; // proxy/tunnel xatosi — qayta yuklash yordam bermaydi
+    }
+    statusCode = response ? response.status() : null;
+    // 404 yoki status yo'q bo'lsa — bu VFS NoSuchKey sahifasimi tekshiramiz.
+    let body = "";
+    if (statusCode === 404 || statusCode === 403 || statusCode == null) {
+      body = (
+        await p
+          .locator("body")
+          .innerText()
+          .catch(() => "")
+      )
+        .slice(0, 400)
+        .toLowerCase();
+    }
+    noSuchKey =
+      statusCode === 404 ||
+      /nosuchkey|specified key does not exist|404 not found/.test(body);
+    if (!noSuchKey) break; // sahifa keldi (yoki boshqa holat) — chiqamiz
+    if (load < opts.maxReloads) {
+      step(
+        `${opts.label}: VFS 404 (NoSuchKey) — qayta yuklanmoqda (#${load + 1})...`,
+      );
+      await waitForCloudflareClear(p, step).catch(() => {});
+      if (await acceptCookies(p)) step("Cookie qabul qilindi");
+      await humanPause(900, 1600);
+    }
+  }
+  return { response, gotoError, statusCode, noSuchKey };
+}
+
+/**
  * "Dial Code" dropdownidan +998 (yoki berilgan kod) ni tanlaydi.
  * VFS Angular Material mat-select (yoki native select / qidiruvli overlay)
  * bo'lishi mumkin — bir necha usulni ketma-ket sinaydi. Hech qachon throw qilmaydi.
@@ -168,7 +237,7 @@ async function selectDialCode(
         ),
       ) as HTMLElement[];
       if (opts.length === 0) return false;
-      let chosen =
+      const chosen =
         opts.find((o) => (o.textContent || "").includes("+" + wanted)) ||
         opts.find((o) => (o.textContent || "").includes(wanted)) ||
         opts.find((o) => (o.textContent || "").toLowerCase().includes("uzbek"));
@@ -336,6 +405,7 @@ export async function registerToBooking(
     );
     const proxyOn = isProxyEnabled() && !opts?.noProxy;
     let lastGotoError = false;
+    let lastNoSuchKey = false;
     let pageOpened = false;
 
     for (let attempt = 0; attempt < maxIpRetries; attempt++) {
@@ -373,13 +443,16 @@ export async function registerToBooking(
       });
 
       // Warmup: login bilan bir xil — avval yengilroq sahifa (region cookie +
-      // Cloudflare). .env: BOOKING_WARMUP_URL.
+      // Cloudflare). .env: BOOKING_WARMUP_URL. VFS NoSuchKey 404 bo'lsa qayta
+      // yuklaymiz (region cookie o'rnashishi uchun) — keyin register ochiladi.
       const warmupUrl = (process.env.BOOKING_WARMUP_URL || "").trim();
       if (warmupUrl && warmupUrl !== url && attempt === 0) {
         step("Asosiy sahifa (warmup) ochilmoqda...");
-        await p
-          .goto(warmupUrl, { waitUntil: "commit", timeout: 45000 })
-          .catch(() => {});
+        await loadWithHealing(p, warmupUrl, step, pageErrors, {
+          waitUntil: "domcontentloaded",
+          maxReloads: 2,
+          label: "warmup",
+        });
         await waitForCloudflareClear(p, step);
         if (await acceptCookies(p)) step("Cookie qabul qilindi");
         await humanPause(400, 800);
@@ -387,34 +460,44 @@ export async function registerToBooking(
       }
 
       step("Register sahifasi ochilmoqda...");
-      let gotoError = false;
-      let response: import("playwright").Response | null = null;
-      try {
-        response = await p.goto(url, {
-          waitUntil: "domcontentloaded",
-          timeout: 45000,
-        });
-      } catch (e) {
-        gotoError = true;
-        const m = e instanceof Error ? e.message : String(e);
-        pageErrors.push(`goto: ${m}`.slice(0, 200));
-      }
-      base.statusCode = response ? response.status() : null;
+      // VFS S3 NoSuchKey 404 FLAKY — bir necha marta qayta yuklab ko'ramiz
+      // (CloudFront qiziydi). .env: BOOKING_REGISTER_RELOAD_RETRIES (default 4).
+      const healed = await loadWithHealing(p, url, step, pageErrors, {
+        waitUntil: "domcontentloaded",
+        maxReloads: Math.max(
+          0,
+          Number(process.env.BOOKING_REGISTER_RELOAD_RETRIES || "4"),
+        ),
+        label: "register",
+      });
+      const gotoError = healed.gotoError;
+      base.statusCode = healed.statusCode;
+      const noSuchKey = healed.noSuchKey;
       step(
         gotoError
           ? "Sahifa ochilmadi (proxy/ulanish xatosi)"
-          : `Sahifa ochildi (HTTP ${base.statusCode ?? "?"})`,
+          : noSuchKey
+            ? `VFS 404 (NoSuchKey) — sahifa kelmadi (HTTP ${base.statusCode ?? "?"})`
+            : `Sahifa ochildi (HTTP ${base.statusCode ?? "?"})`,
       );
 
-      if (!gotoError && shouldLogExitIp()) {
+      if (!gotoError && !noSuchKey && shouldLogExitIp()) {
         base.exitIp = await readExitIp(p);
         step(`Exit IP: ${base.exitIp || "—"}`);
       }
 
       const cleared = gotoError ? false : await waitForCloudflareClear(p, step);
-      const blocked = gotoError || base.statusCode === 403 || !cleared;
+      // VFS NoSuchKey 404 = sahifa kelmadi -> yangi IP bilan qayta urinamiz
+      // (region cookie IP'ga bog'liq bo'lishi mumkin — toza IP yordam beradi).
+      const blocked =
+        gotoError ||
+        base.statusCode === 403 ||
+        base.statusCode === 404 ||
+        noSuchKey ||
+        !cleared;
       lastGotoError = gotoError;
-      if (!gotoError && base.statusCode != null) pageOpened = true;
+      lastNoSuchKey = noSuchKey;
+      if (!gotoError && base.statusCode != null && !noSuchKey) pageOpened = true;
 
       if (!blocked || !proxyOn || attempt === maxIpRetries - 1) {
         if (blocked) {
@@ -443,6 +526,20 @@ export async function registerToBooking(
       return {
         ...base,
         note: "Proxy/VPN ulanmadi (ERR_TUNNEL_CONNECTION_FAILED) — internet/proxy balansini tekshiring",
+      };
+    }
+
+    // Barcha urinishlardan keyin ham VFS NoSuchKey 404 — sahifa kelmadi.
+    // Formani topishga urinmaymiz (yo'q). Aniq xabar qaytaramiz.
+    if (!pageOpened && lastNoSuchKey) {
+      await dumpDebug(page, "register-404").catch(() => {});
+      if (closeSession) await closeSession().catch(() => {});
+      closeSession = null;
+      base.finalUrl = page.url();
+      base.pageError = pageErrors.slice(0, 10).join(" | ");
+      return {
+        ...base,
+        note: "VFS 404 (NoSuchKey) — register sahifasi kelmadi (CloudFront/region). Qayta urinib ko'ring yoki boshqa IP.",
       };
     }
 
@@ -583,7 +680,11 @@ export async function registerToBooking(
 
     // opts.submit=true bo'lsagina bosamiz. Default: bosmaymiz (foydalanuvchi
     // so'ragan — register bosilishigacha olib boramiz, bosmaymiz).
-    if (opts?.submit && base.registerButtonFound && base.registerButtonEnabled) {
+    if (
+      opts?.submit &&
+      base.registerButtonFound &&
+      base.registerButtonEnabled
+    ) {
       await regBtn.click({ timeout: 8000 }).catch(() => {});
       base.submitted = true;
       step("Register bosildi");
