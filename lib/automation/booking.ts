@@ -14,11 +14,11 @@ import { humanPause } from "./human";
 import { openBrowserContext, profileDirFor } from "./browser";
 import {
   fillSmartField,
-  waitForTurnstile,
   clickSubmit,
   readExitIp,
   extractRef,
 } from "./page-utils";
+import { waitForTurnstile } from "./turnstile";
 
 // Har bir maydon uchun forma elementlarini topish kalit so'zlari (kichik harf).
 const FIELD_KEYWORDS: Record<keyof AutomationApplicant, string[]> = {

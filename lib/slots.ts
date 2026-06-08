@@ -374,7 +374,10 @@ async function patchSlot(
   return toView(row as SlotRow);
 }
 
-export async function runSlotTick(id: number): Promise<SlotTickResult> {
+export async function runSlotTick(
+  id: number,
+  opts?: { notify?: boolean },
+): Promise<SlotTickResult> {
   const now = new Date();
   const current = await prisma.slot.findUnique({ where: { id } });
   if (!current) {
@@ -477,6 +480,9 @@ export async function runSlotTick(id: number): Promise<SlotTickResult> {
       lastMessage: `Kalendar yopiq: ${cal.note}`,
       ...(cal.screenshotPath ? { lastShotPath: cal.screenshotPath } : {}),
     });
+    // Davriy holat xabari (slot-worker har ~10 daqiqada) — adminlarga skrinshot
+    // + ketgan vaqt bilan. Faqat notify yoqilganda (worker), client polling EMAS.
+    if (opts?.notify) notifySlotCheck(slot, cal).catch(() => {});
     return { slot, checked: true, slotOpen: false, message: slot.lastMessage };
   }
 
@@ -516,9 +522,6 @@ async function notifySlotOpen(
     "false";
   if (!enabled || !isTelegramConfigured()) return;
 
-  const chatIds = getAdminChatIds();
-  if (!chatIds.length) return;
-
   const dir = slot.direction;
   const datesPreview = cal.availableDates.slice(0, 8).join(", ");
   const caption =
@@ -527,16 +530,78 @@ async function notifySlotOpen(
     `📋 Slot: <b>${escapeHtml(slot.name)}</b>\n` +
     (slot.category ? `🏷 ${escapeHtml(slot.category)}\n` : "") +
     (slot.subCategory ? `↳ ${escapeHtml(slot.subCategory)}\n` : "") +
+    `➖➖➖➖➖➖➖➖➖➖\n` +
     `📅 Bo'sh kunlar: <b>${cal.availableDates.length}</b>` +
     (datesPreview ? ` (${escapeHtml(datesPreview)})` : "") +
     `\n🚀 Navbatga yuborildi: <b>${queuedJobs}</b> user` +
+    `\n⏱ Davomiyligi: <b>${fmtDuration(cal.durationMs)}</b>` +
+    `\n🕐 Vaqt: ${nowTimeStr()}` +
     (cal.exitIp ? `\n🌐 IP: ${escapeHtml(cal.exitIp)}` : "");
 
-  // Skrinshot bo'lsa — rasm bilan, aks holda oddiy matn.
+  await broadcastSlotPhoto(caption, cal.screenshotPath, `slot-${slot.id}.png`);
+}
+
+// Har tekshiruvdan keyin (slot-worker har ~10 daqiqada) adminlarga joriy holatni
+// CHIROYLI matn (iconlar bilan) + oxirgi skrinshot + ketgan vaqt bilan yuboradi.
+// Slot OCHILGANDA notifySlotOpen alohida shoshilinch xabar beradi — bu esa
+// odatdagi "bo'sh slot yo'q" holatini har sikl ko'rsatib turadi.
+async function notifySlotCheck(
+  slot: SlotView,
+  cal: CalendarDetectResult,
+): Promise<void> {
+  const enabled =
+    (process.env.SLOT_NOTIFY_TELEGRAM || "true").trim().toLowerCase() !==
+    "false";
+  if (!enabled || !isTelegramConfigured()) return;
+
+  const dir = slot.direction;
+  // Yopiq holatning aniq turini cal.note bo'yicha aniqlaymiz (3 xil holat):
+  //  1) bo'sh slot yo'q (VFS xabari)  2) ochilgan, bo'sh slot tugagan
+  //  3) tekshiruv bajarilmadi / holat aniqlanmadi (sahifa yuklanmadi).
+  const note = (cal.note || "").toLowerCase();
+  let statusLine: string;
+  if (!cal.loggedIn) {
+    statusLine = "🔒 <b>Login bo'lmadi</b>";
+  } else if (note.includes("500") || note.includes("server xatosi")) {
+    statusLine = "🛑 <b>VFS server xatosi (500) — qayta urinish</b>";
+  } else if (note.includes("tugagan")) {
+    statusLine = "🟡 <b>Slot ochildi, lekin bo'sh slot TUGAGAN</b>";
+  } else if (note.includes("aniqlanmadi") || note.includes("yuklanmadi")) {
+    statusLine = "⚠️ <b>Tekshiruv bajarilmadi (sahifa yuklanmadi)</b>";
+  } else {
+    statusLine = "⛔ <b>Slot ochiq emas — bo'sh slot yo'q</b>";
+  }
+  const caption =
+    `🔎 <b>SLOT TEKSHIRUVI</b>\n` +
+    `🧭 ${dir.label}\n` +
+    `📋 <b>${escapeHtml(slot.name)}</b>\n` +
+    (slot.category ? `🏷 ${escapeHtml(slot.category)}\n` : "") +
+    (slot.subCategory ? `↳ ${escapeHtml(slot.subCategory)}\n` : "") +
+    `➖➖➖➖➖➖➖➖➖➖\n` +
+    `${statusLine}\n` +
+    `🔑 Login: <b>${cal.loggedIn ? "bor ✓" : "yo'q ✗"}</b>\n` +
+    (cal.note ? `📝 ${escapeHtml(cal.note)}\n` : "") +
+    `⏱ Davomiyligi: <b>${fmtDuration(cal.durationMs)}</b>\n` +
+    `🕐 Vaqt: ${nowTimeStr()}` +
+    (cal.exitIp ? `\n🌐 IP: ${escapeHtml(cal.exitIp)}` : "");
+
+  await broadcastSlotPhoto(caption, cal.screenshotPath, `slot-${slot.id}.png`);
+}
+
+// Barcha adminlarga skrinshot (bo'lsa) bilan, aks holda oddiy matn yuboradi.
+// Bitta adminga yuborilmasa ham qolganlariga davom etadi (throw qilmaydi).
+async function broadcastSlotPhoto(
+  caption: string,
+  screenshotPath: string | null,
+  filename: string,
+): Promise<void> {
+  const chatIds = getAdminChatIds();
+  if (!chatIds.length) return;
+
   let shot: Buffer | null = null;
-  if (cal.screenshotPath) {
+  if (screenshotPath) {
     try {
-      shot = await fs.promises.readFile(cal.screenshotPath);
+      shot = await fs.promises.readFile(screenshotPath);
     } catch {
       shot = null;
     }
@@ -545,11 +610,7 @@ async function notifySlotOpen(
   for (const chatId of chatIds) {
     try {
       if (shot) {
-        await sendPhoto(chatId, {
-          buffer: shot,
-          filename: `slot-${slot.id}.png`,
-          caption,
-        });
+        await sendPhoto(chatId, { buffer: shot, filename, caption });
       } else {
         await sendMessage(chatId, caption);
       }
@@ -557,6 +618,20 @@ async function notifySlotOpen(
       // Bitta adminga yuborilmasa ham qolganlariga davom etamiz.
     }
   }
+}
+
+// Davomiylikni chiroyli ko'rsatadi: <60s => "12.3s", aks holda "2m 5s".
+function fmtDuration(ms: number): string {
+  const s = Math.max(0, ms) / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s % 60);
+  return `${m}m ${rem}s`;
+}
+
+// Joriy vaqt HH:MM:SS (24 soat).
+function nowTimeStr(): string {
+  return new Date().toLocaleTimeString("en-GB", { hour12: false });
 }
 
 function escapeHtml(s: string): string {

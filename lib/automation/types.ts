@@ -92,3 +92,32 @@ export type LoginResult = {
   token: string | null; // auth token (JWT/session) — booking bosqichi uchun
   tokenSource: string | null; // token qayerdan olindi (localStorage/cookie kaliti)
 };
+
+// VFS register sahifasi (BOOKING_REGISTER_URL) — yangi akkaunt yaratish.
+// Forma: email, password, confirm password, dial code (+998) + mobile number,
+// 3 ta checkbox (privacy/data-transfer/terms), Cloudflare Turnstile, Register.
+// registerToBooking() qaytaradi. Hozircha Register tugmasini BOSMAYDI (tayyorlaydi).
+export type RegisterResult = {
+  ok: boolean; // forma to'liq to'ldirildi va Register bosishga tayyor bo'ldimi
+  note: string;
+  url: string; // register URL
+  finalUrl: string; // urinish oxiridagi URL
+  captchaPresent: boolean;
+  captchaSolved: boolean;
+  filledEmail: boolean;
+  filledPassword: boolean;
+  filledConfirm: boolean; // confirm password to'ldi
+  dialCodeSelected: boolean; // dial code (+998) tanlandi
+  filledPhone: boolean; // mobile number to'ldi
+  checkboxesTotal: number; // sahifada topilgan checkbox soni
+  checkboxesChecked: number; // belgilangan checkbox soni
+  registerButtonFound: boolean; // Register tugmasi topildimi
+  registerButtonEnabled: boolean; // Register tugmasi faol (bosishga tayyor)mi
+  submitted: boolean; // Register bosildimi (default: yo'q — opts.submit=true bo'lsa)
+  email: string; // ishlatilgan email
+  password: string; // ishlatilgan parol (test uchun — qaysi parol qo'yilganini bilish)
+  phone: string; // ishlatilgan to'liq telefon (dial code + number)
+  exitIp: string | null;
+  statusCode: number | null;
+  pageError: string | null;
+};

@@ -15,9 +15,6 @@ import {
 } from "./browser";
 import {
   acceptCookies,
-  clickTurnstile,
-  waitForCloudflareClear,
-  waitForTurnstile,
   readExitIp,
   readAuthToken,
   extractTokenFromBody,
@@ -25,6 +22,11 @@ import {
   dumpDebug,
   dumpStorage,
 } from "./page-utils";
+import {
+  clickTurnstile,
+  waitForCloudflareClear,
+  waitForTurnstile,
+} from "./turnstile";
 
 /**
  * Booking saytiga LOGIN qiladi (BOOKING_LOGIN_URL). Proxy (sticky, email bo'yicha)
@@ -186,8 +188,11 @@ export async function loginToBooking(
       // Warmup: avval asosiy sahifani ochamiz (region cookie/sessiya o'rnatadi
       // va Cloudflare'ni yengilroq sahifada o'taymiz). .env: BOOKING_WARMUP_URL.
       const warmupUrl = (process.env.BOOKING_WARMUP_URL || "").trim();
-      // Warmup faqat BIRINCHI urinishda (retry'larda takrorlash vaqt/trafik isrofi).
-      if (warmupUrl && attempt === 0) {
+      // Warmup faqat BIRINCHI urinishda VA warmup URL login URL'dan FARQ qilsa.
+      // Bir xil bo'lsa — login sahifasi IKKI MARTA yuklanardi (sof takror, ~5s
+      // isrof). To'g'ridan-to'g'ri login navigatsiyasi Cloudflare'ni baribir
+      // hal qiladi, shuning uchun bir xil URL'da warmup'ni o'tkazib yuboramiz.
+      if (warmupUrl && warmupUrl !== url && attempt === 0) {
         step("Asosiy sahifa (warmup) ochilmoqda...");
         await p
           .goto(warmupUrl, { waitUntil: "commit", timeout: 45000 })
@@ -283,7 +288,13 @@ export async function loginToBooking(
     // boshlaydi. Shuning uchun captcha kutishni SHU YERDA (email/parol to'ldirish
     // bilan PARALLEL) ishga tushiramiz — token email/parol yozilayotganda tayyor
     // bo'ladi va keyin qo'shimcha kutish ~0 bo'ladi.
-    const captchaPromise = waitForTurnstile(page);
+    // QISQA auto-pass oynasi: token shu vaqtda kelmasa interaktiv checkbox bor
+    // demak — to'liq 30s kutmasdan darrov bosamiz (vaqt tejash). Klikdan keyin
+    // to'liq BOOKING_CAPTCHA_TIMEOUT_MS kutiladi.
+    const captchaPromise = waitForTurnstile(
+      page,
+      Number(process.env.BOOKING_CAPTCHA_AUTOPASS_MS || "6000"),
+    );
 
     const emailEl = page.locator(emailSel).first();
     if ((await emailEl.count()) > 0) {
@@ -338,7 +349,7 @@ export async function loginToBooking(
       pageErrors.push("turnstile: token kutib olinmadi");
     }
 
-    await humanPause(400, 900);
+    await humanPause(150, 400);
 
     // Cookie banneri Sign In tugmasini to'sib qo'yishi mumkin — yana yopamiz.
     if (await acceptCookies(page)) step("Cookie qabul qilindi");
@@ -366,7 +377,7 @@ export async function loginToBooking(
       .catch(() => {});
     // URL o'zgargach qisqa kutish — dashboard DOM/token o'rnashishi uchun
     // (networkidle butun sahifa yuklanishini kutadi, bizga shart emas).
-    await page.waitForTimeout(800).catch(() => {});
+    await page.waitForTimeout(350).catch(() => {});
 
     base.finalUrl = page.url();
     const bodyText = (

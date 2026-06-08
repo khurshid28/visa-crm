@@ -75,7 +75,7 @@ async function runCycle(): Promise<void> {
     await Promise.all(
       batch.map(async (s) => {
         try {
-          const res = await runSlotTick(s.id);
+          const res = await runSlotTick(s.id, { notify: true });
           log(
             `slot #${s.id} (${s.name}): ${res.message}` +
               (res.slotOpen ? " ✅ OCHILDI" : ""),

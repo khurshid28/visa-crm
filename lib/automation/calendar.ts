@@ -41,16 +41,41 @@ import {
   profileDirFor,
   applyResourceBlocking,
 } from "./browser";
+import { readExitIp, acceptCookies, fillFieldReliably } from "./page-utils";
 import {
-  readExitIp,
-  acceptCookies,
   clickTurnstile,
   waitForTurnstile,
   waitForCloudflareClear,
-  fillFieldReliably,
-} from "./page-utils";
+  solveTurnstile,
+} from "./turnstile";
 import { humanPause } from "./human";
 import { proxyMetaFor, shouldLogExitIp, isProxyEnabled } from "../proxy";
+import {
+  slotMonitorProfileBase,
+  saveSession,
+  restoreSession,
+  clearSession,
+  saveVfsOptions,
+  markRestricted,
+  restrictedRemainingMin,
+  markLoginAttempt,
+  loginCooldownRemainingMin,
+} from "./session";
+
+// ── Timing (debug): SLOT_TIMING=true bo'lsa har bosqich vaqtini chop etadi ──
+const TIMING = (process.env.SLOT_TIMING || "").trim().toLowerCase() === "true";
+function makeLap(): (label: string) => void {
+  const t0 = Date.now();
+  let last = t0;
+  return (label: string) => {
+    if (!TIMING) return;
+    const now = Date.now();
+    const d = ((now - last) / 1000).toFixed(1);
+    const tot = ((now - t0) / 1000).toFixed(1);
+    console.log(`  ⏱  ${label.padEnd(30)} +${d}s  (jami ${tot}s)`);
+    last = now;
+  };
+}
 
 const DEFAULT_CALENDAR_URL =
   "https://visa.vfsglobal.com/uzb/en/lva/application-detail";
@@ -126,94 +151,6 @@ function slotCheckProxyEnabled(): boolean {
   return v === "true" || v === "1";
 }
 
-/**
- * Slot-monitor uchun ALOHIDA, doimiy CDP profil bazasi. Bu yerda token/cookie
- * va cache SAQLANADI — har 10 minutda qayta login qilinmaydi (tezroq, IP kam
- * "charchaydi"). register/order profilidan ajratilgan, ularga ta'sir qilmaydi.
- * .env: SLOT_MONITOR_PROFILE_DIR (bo'sh bo'lsa uploads/slot-monitor-profiles).
- */
-function slotMonitorProfileBase(): string {
-  const rel =
-    envStr("SLOT_MONITOR_PROFILE_DIR") ||
-    path.join("uploads", "slot-monitor-profiles");
-  return path.isAbsolute(rel) ? rel : path.join(process.cwd(), rel);
-}
-
-/** Saqlangan sessiya (token) fayli — har profileKey uchun alohida. */
-function sessionStorePath(profileKey: string): string {
-  const safe = profileKey.replace(/[^a-z0-9_-]+/gi, "_").slice(0, 60);
-  return path.join(slotMonitorProfileBase(), `session-${safe}.json`);
-}
-
-/**
- * Sahifadan localStorage + sessionStorage'ni o'qib, diskka saqlaydi. VFS token'ni
- * sessionStorage'da saqlaydi — u brauzer yopilganda yo'qoladi. Shuni faylga
- * yozib qo'yamiz, keyingi tekshiruvda qayta tiklaymiz (qayta login KERAK EMAS).
- */
-async function saveSession(
-  page: import("playwright").Page,
-  profileKey: string,
-): Promise<void> {
-  try {
-    const data = await page.evaluate(() => {
-      const dump = (s: Storage) => {
-        const o: Record<string, string> = {};
-        for (let i = 0; i < s.length; i++) {
-          const k = s.key(i);
-          if (k) o[k] = s.getItem(k) ?? "";
-        }
-        return o;
-      };
-      return { ls: dump(localStorage), ss: dump(sessionStorage) };
-    });
-    // Token bormi? (bo'sh sessiyani saqlamaymiz.)
-    const hasAny =
-      Object.keys(data.ls).length > 0 || Object.keys(data.ss).length > 0;
-    if (!hasAny) return;
-    const file = sessionStorePath(profileKey);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(
-      file,
-      JSON.stringify({ savedAt: Date.now(), ...data }),
-      "utf8",
-    );
-  } catch {
-    /* sessiyani saqlay olmadik — muhim emas, keyingi safar login bo'ladi */
-  }
-}
-
-/**
- * Diskdagi saqlangan sessiyani (localStorage + sessionStorage) sahifaga TIKLAYDI.
- * DIQQAT: sahifa AYNI origin'da ochilgan bo'lishi kerak (storage origin'ga bog'liq).
- * Tiklangan bo'lsa true qaytaradi.
- */
-async function restoreSession(
-  page: import("playwright").Page,
-  profileKey: string,
-): Promise<boolean> {
-  try {
-    const file = sessionStorePath(profileKey);
-    if (!fs.existsSync(file)) return false;
-    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as {
-      ls?: Record<string, string>;
-      ss?: Record<string, string>;
-    };
-    await page.evaluate((d) => {
-      try {
-        for (const [k, v] of Object.entries(d.ls || {}))
-          localStorage.setItem(k, v);
-        for (const [k, v] of Object.entries(d.ss || {}))
-          sessionStorage.setItem(k, v);
-      } catch {
-        /* storage yozib bo'lmadi */
-      }
-    }, raw);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Akkaunt 429001 "Access Restricted" bo'lganmi? (qayta login QILMAYMIZ.) */
 async function isAccountRestricted(
   page: import("playwright").Page,
@@ -232,48 +169,6 @@ async function isAccountRestricted(
   }
 }
 
-/** 429001 backoff marker fayli — akkaunt necha vaqtgача tinch qoldirilsin. */
-function restrictedMarkerPath(profileKey: string): string {
-  const safe = profileKey.replace(/[^a-z0-9_-]+/gi, "_").slice(0, 60);
-  return path.join(slotMonitorProfileBase(), `restricted-${safe}.json`);
-}
-
-/** 429001 aniqlansa — backoff yozamiz (default 60 min urinmaymiz). */
-function markRestricted(profileKey: string): void {
-  try {
-    const min = Number(process.env.SLOT_RESTRICTED_BACKOFF_MIN || 60);
-    const file = restrictedMarkerPath(profileKey);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(
-      file,
-      JSON.stringify({ until: Date.now() + Math.max(1, min) * 60_000 }),
-      "utf8",
-    );
-  } catch {
-    /* muhim emas */
-  }
-}
-
-/** Backoff hali tugamaganmi? Tugamagan bo'lsa necha daqiqa qolganini qaytaradi. */
-function restrictedRemainingMin(profileKey: string): number {
-  try {
-    const file = restrictedMarkerPath(profileKey);
-    if (!fs.existsSync(file)) return 0;
-    const { until } = JSON.parse(fs.readFileSync(file, "utf8")) as {
-      until?: number;
-    };
-    if (!until) return 0;
-    const remMs = until - Date.now();
-    if (remMs <= 0) {
-      fs.rmSync(file, { force: true });
-      return 0;
-    }
-    return Math.ceil(remMs / 60_000);
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * VFS Angular Material mat-select dropdownni TANLAYDI.
  *  - labelHint: dropdown ustidagi yorliq matni (masalan "appointment category").
@@ -287,17 +182,19 @@ async function selectDropdown(
   orderIndex: number,
   optionText: string | null | undefined,
   labelHint: string,
-): Promise<boolean> {
+): Promise<{ picked: boolean; options: string[] }> {
   try {
     // 1) Dropdown tetigini (mat-select) topamiz — yorliq yoki tartib bo'yicha.
+    //    Agar ALLAQACHON kerakli qiymat tanlangan bo'lsa (masalan, bitta markaz
+    //    avto-tanlanadi) — ochmaymiz, "already" qaytaramiz (vaqt tejaladi).
     const opened = await page.evaluate(
-      ({ orderIndex, labelHint }) => {
+      ({ orderIndex, labelHint, optionText }) => {
         const selects = Array.from(
           document.querySelectorAll(
             "mat-select, .mat-mdc-select, .mat-select, [role='combobox']",
           ),
         ) as HTMLElement[];
-        if (selects.length === 0) return false;
+        if (selects.length === 0) return "none";
 
         let target: HTMLElement | null = null;
         if (labelHint) {
@@ -315,31 +212,56 @@ async function selectDropdown(
           }
         }
         if (!target) target = selects[Math.min(orderIndex, selects.length - 1)];
-        if (!target) return false;
+        if (!target) return "none";
+
+        // Joriy ko'rsatilayotgan qiymat (placeholder bo'lmagan haqiqiy matn)?
+        const valEl = target.querySelector(
+          ".mat-mdc-select-value-text, .mat-select-value-text, .mat-mdc-select-value, .mat-select-value",
+        );
+        const cur = (valEl?.textContent || "").trim().toLowerCase();
+        const isPlaceholder =
+          !cur || cur.startsWith("select") || cur.startsWith("choose");
+        const want = (optionText || "").trim().toLowerCase();
+        if (!isPlaceholder) {
+          // Aniq qiymat so'ralmagan, yoki joriy qiymat so'ralganga mos => tayyor.
+          if (!want || cur === want || cur.includes(want)) return "already";
+        }
         target.scrollIntoView({ block: "center" });
         target.click();
-        return true;
+        return "opened";
       },
-      { orderIndex, labelHint },
+      { orderIndex, labelHint, optionText },
     );
-    if (!opened) return false;
+    if (opened === "none") return { picked: false, options: [] };
+    // Allaqachon kerakli qiymat tanlangan — ochish/kutish shart emas.
+    if (opened === "already") return { picked: true, options: [] };
 
     // 2) Ochilgan overlay paneldagi variantlar render bo'lishini kutamiz.
+    //    Sozlanadi: BOOKING_DROPDOWN_OPEN_TIMEOUT_MS (default 2500 — eski 6000
+    //    juda uzun edi; variantlar 2.5s ichida chiqmasa, baribir chiqmaydi).
     await page
       .waitForSelector(
         "mat-option, .mat-mdc-option, .mat-option, [role='option']",
-        { timeout: 6000, state: "visible" },
+        {
+          timeout: Number(process.env.BOOKING_DROPDOWN_OPEN_TIMEOUT_MS || 2500),
+          state: "visible",
+        },
       )
       .catch(() => {});
 
     // 3) Variantni matn bo'yicha tanlaymiz (bo'sh bo'lsa birinchi haqiqiysini).
-    const picked = await page.evaluate((optionText) => {
+    //    Bir vaqtda BARCHA variantlar ro'yxatini ham qaytaramiz (kelajakda
+    //    formalar uchun saqlash maqsadida — centre/category/subCategory ro'yxati).
+    const result = await page.evaluate((optionText) => {
       const opts = Array.from(
         document.querySelectorAll(
           "mat-option, .mat-mdc-option, .mat-option, [role='option']",
         ),
       ) as HTMLElement[];
-      if (opts.length === 0) return false;
+      const options = opts
+        .map((o) => (o.textContent || "").trim())
+        .filter((t) => t.length > 0);
+      if (opts.length === 0) return { picked: false, options };
       const want = (optionText || "").trim().toLowerCase();
       let chosen: HTMLElement | undefined;
       if (want) {
@@ -359,17 +281,21 @@ async function selectDropdown(
           );
         });
       }
-      if (!chosen) return false;
+      if (!chosen) return { picked: false, options };
       chosen.scrollIntoView({ block: "center" });
       chosen.click();
-      return true;
+      return { picked: true, options };
     }, optionText);
 
     // Tanlovdan keyin bog'liq (dependent) dropdownlar yuklanishi uchun kutamiz.
-    await page.waitForTimeout(900);
-    return picked;
+    // Sozlanadi: BOOKING_DROPDOWN_SETTLE_MS. 900ms — bog'liq sub-category VFS'dan
+    // yuklanib ulgurishi uchun (500ms juda qisqa edi — sub bo'sh qolardi).
+    await page.waitForTimeout(
+      Number(process.env.BOOKING_DROPDOWN_SETTLE_MS || 900),
+    );
+    return result;
   } catch {
-    return false;
+    return { picked: false, options: [] };
   }
 }
 
@@ -383,22 +309,23 @@ async function readAvailability(
   continueEnabled: boolean;
   calendarFound: boolean;
   availableDates: string[];
+  errorPage: boolean;
 }> {
   return page.evaluate(
     ({ noSlotMarks, continueText, dateSel, calSel }) => {
-      const visible = (el: Element): boolean => {
-        const r = (el as HTMLElement).getBoundingClientRect();
-        const st = window.getComputedStyle(el as HTMLElement);
-        return (
-          r.width > 0 &&
-          r.height > 0 &&
-          st.visibility !== "hidden" &&
-          st.display !== "none"
-        );
-      };
-
       const bodyText = (document.body?.innerText || "").toLowerCase();
       const noSlot = noSlotMarks.some((m: string) => bodyText.includes(m));
+
+      // VFS server xato sahifasi (500 / "unexpected error") — bu slot holati EMAS,
+      // serverning vaqtinchalik xatosi yoki sessiya/so'rov mos kelmagani. Qayta
+      // urinish kerak. Forma render bo'lmaydi (dropdownlar bo'sh chiqadi).
+      const errorPage =
+        bodyText.includes("unexpected error") ||
+        bodyText.includes("error (500)") ||
+        bodyText.includes("(500)") ||
+        bodyText.includes("(502)") ||
+        bodyText.includes("(503)") ||
+        bodyText.includes("(504)");
 
       // Continue tugmasi — matn bo'yicha topamiz, disabled holatini tekshiramiz.
       const wantBtn = (continueText || "continue").toLowerCase();
@@ -419,13 +346,32 @@ async function readAvailability(
           cont.getAttribute("disabled") !== null ||
           cont.getAttribute("aria-disabled") === "true" ||
           cont.className.toLowerCase().includes("disabled");
-        continueEnabled = !disabled && visible(cont);
+        const cr = cont.getBoundingClientRect();
+        const cst = window.getComputedStyle(cont);
+        const cvis =
+          cr.width > 0 &&
+          cr.height > 0 &&
+          cst.visibility !== "hidden" &&
+          cst.display !== "none";
+        continueEnabled = !disabled && cvis;
       }
 
       let calendarFound = false;
       for (const sel of calSel) {
         try {
-          if (Array.from(document.querySelectorAll(sel)).some(visible)) {
+          const anyVis = Array.from(document.querySelectorAll(sel)).some(
+            (el) => {
+              const r = el.getBoundingClientRect();
+              const st = window.getComputedStyle(el);
+              return (
+                r.width > 0 &&
+                r.height > 0 &&
+                st.visibility !== "hidden" &&
+                st.display !== "none"
+              );
+            },
+          );
+          if (anyVis) {
             calendarFound = true;
             break;
           }
@@ -438,7 +384,14 @@ async function readAvailability(
       for (const sel of dateSel) {
         try {
           for (const n of Array.from(document.querySelectorAll(sel))) {
-            if (!visible(n)) continue;
+            const r = n.getBoundingClientRect();
+            const st = window.getComputedStyle(n);
+            const vis =
+              r.width > 0 &&
+              r.height > 0 &&
+              st.visibility !== "hidden" &&
+              st.display !== "none";
+            if (!vis) continue;
             if (n.getAttribute("aria-disabled") === "true") continue;
             const t = (n.textContent || "").trim();
             if (t) dates.push(t);
@@ -454,6 +407,7 @@ async function readAvailability(
         continueEnabled,
         calendarFound,
         availableDates: Array.from(new Set(dates)).slice(0, 40),
+        errorPage,
       };
     },
     {
@@ -475,9 +429,12 @@ async function readAvailability(
 async function waitForDetailOrLogin(
   page: Page,
   timeoutMs: number,
+  bail?: () => boolean,
 ): Promise<"detail" | "login" | "unknown"> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // 401/403 API javobi kelgan bo'lsa — token o'lik, kutib o'tirmaymiz.
+    if (bail?.()) return "login";
     const st = await page
       .evaluate(() => {
         const url = location.href.toLowerCase();
@@ -508,9 +465,12 @@ async function waitForDetailOrLogin(
 async function waitForDashboardOrLogin(
   page: Page,
   timeoutMs: number,
+  bail?: () => boolean,
 ): Promise<"dashboard" | "login" | "unknown"> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // 401/403 API javobi kelgan bo'lsa — token o'lik, 30s kutmaymiz.
+    if (bail?.()) return "login";
     const st = await page
       .evaluate(() => {
         const url = location.href.toLowerCase();
@@ -519,12 +479,24 @@ async function waitForDashboardOrLogin(
         );
         if (hasLogin || url.includes("/login") || url.includes("/auth"))
           return "login";
+        // Token eskirgan: VFS "Session Expired or Invalid (401)" / page-not-found
+        // sahifasiga olib boradi. Bu yerda login formasi YO'Q — 30s kutmasdan
+        // DARROV "login" deb qaytaramiz (eski token o'chiriladi, toza login).
         const txt = (document.body?.innerText || "").toLowerCase();
+        if (
+          url.includes("page-not-found") ||
+          url.includes("session-expired") ||
+          txt.includes("session expired or invalid") ||
+          txt.includes("session has expired") ||
+          txt.includes("(401)")
+        )
+          return "expired";
         if (txt.includes("start new booking")) return "dashboard";
         return "loading";
       })
       .catch(() => "loading");
     if (st === "dashboard" || st === "login") return st;
+    if (st === "expired") return "login"; // eski token — toza login kerak
     await page.waitForTimeout(500).catch(() => {});
   }
   return "unknown";
@@ -585,23 +557,36 @@ async function loginInSession(
   );
 
   for (let attempt = 0; attempt < maxTries; attempt++) {
-    // Login sahifasini (qayta) yuklaymiz — Turnstile widget toza holatda render
-    // bo'ladi (oldingi "Verification failed" yo'qoladi). Brauzer O'SHA-O'ZI.
-    await page
-      .goto(loginUrl(), { waitUntil: "domcontentloaded", timeout: 45000 })
-      .catch(() => {});
+    const lap = makeLap();
+    // Login sahifasini yuklaymiz. 1-urinishda gotoDetail ALLAQACHON login URL'ni
+    // ochgan bo'lsa — qayta yuklamaymiz (Angular bootstrap'ni noldan boshlamay,
+    // ~1-2s tejaymiz). Retry'larda esa Turnstile toza render bo'lishi uchun
+    // sahifani qayta yuklaymiz (oldingi "Verification failed" yo'qoladi).
+    const onLogin = /\/login(\b|\/|$)/i.test(page.url().toLowerCase());
+    if (attempt > 0 || !onLogin) {
+      await page
+        .goto(loginUrl(), { waitUntil: "domcontentloaded", timeout: 45000 })
+        .catch(() => {});
+    }
     await waitForCloudflareClear(page).catch(() => {});
     if (await acceptCookies(page)) {
       /* cookie qabul qilindi */
     }
+    lap("goto login + cf + cookie");
 
     const emailSel = '#email, input[formcontrolname="username"]';
     await page
       .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
       .catch(() => {});
+    lap("email maydoni ko'rindi");
 
-    // Turnstile token email/parol bilan PARALLEL yechiladi (kutish ~0 bo'ladi).
-    const captchaPromise = waitForTurnstile(page);
+    // Turnstile token email/parol bilan PARALLEL yechiladi. Auto-pass'ni UZOQ
+    // kutmaymiz: forma to'ldirilguncha (~2-3s) auto o'zi kelmasa, interaktiv
+    // checkbox bor demak — DARROV OS-klik bilan o'zimiz bosamiz (kutib turmaymiz).
+    const captchaPromise = waitForTurnstile(
+      page,
+      Number(process.env.BOOKING_CAPTCHA_AUTOPASS_MS || "3000"),
+    );
 
     const emailEl = page.locator(emailSel).first();
     if ((await emailEl.count()) > 0) {
@@ -615,11 +600,18 @@ async function loginInSession(
       await fillFieldReliably(page, passEl, password);
     }
     await humanPause();
+    lap("email/parol to'ldirildi");
 
     let captcha = await captchaPromise;
+    lap(`captcha auto: present=${captcha.present} solved=${captcha.solved}`);
     if (captcha.present && !captcha.solved) {
-      await clickTurnstile(page).catch(() => {});
-      captcha = await waitForTurnstile(page);
+      // clickTurnstile token kelsa TRUE qaytaradi — ortiqcha 30s kutmaymiz.
+      // Kelmasa qisqa (6s) qayta tekshiramiz, keyin sahifa qayta yuklanadi.
+      const solved = await clickTurnstile(page).catch(() => false);
+      captcha = solved
+        ? { present: true, solved: true }
+        : await waitForTurnstile(page, 6000);
+      lap(`captcha klikdan keyin: solved=${captcha.solved}`);
     }
 
     // Captcha hali ham o'tmagan bo'lsa — sahifani qayta yuklab yangi widget
@@ -628,7 +620,7 @@ async function loginInSession(
       continue;
     }
 
-    await humanPause(400, 900);
+    await humanPause(150, 400);
     if (await acceptCookies(page)) {
       /* banner Sign In'ni to'smasin */
     }
@@ -641,19 +633,46 @@ async function loginInSession(
     if ((await signInBtn.count()) > 0) {
       await signInBtn.click({ timeout: 8000 }).catch(() => {});
     }
+    lap("Sign In bosildi");
 
-    // Dashboard'ga o'tishni (login sahifasidan chiqishni) kutamiz.
-    await page
+    // Sign In bosgandan keyin IKKI holatdan birini kutamiz (qaysi avval bo'lsa):
+    //  (a) login sahifasidan CHIQISH (URL o'zgardi) = muvaffaqiyat;
+    //  (b) "Verification failed" / "please try again" xabari = VFS Turnstile
+    //      tokenni RAD etdi → 20s behuda kutmasdan DARROV qayta urinamiz.
+    const leftLogin = page
       .waitForURL((u) => !/\/login(\b|\/|$)/i.test(u.toString()), {
         timeout: 20000,
       })
-      .catch(() => {});
-    await page.waitForTimeout(800).catch(() => {});
+      .then(() => true)
+      .catch(() => false);
+    const verifyFailed = page
+      .waitForFunction(
+        () => {
+          const t = (
+            document.body && document.body.innerText
+              ? document.body.innerText
+              : ""
+          ).toLowerCase();
+          return (
+            t.indexOf("verification failed") >= 0 ||
+            t.indexOf("verification unsuccessful") >= 0 ||
+            t.indexOf("captcha verification") >= 0 ||
+            t.indexOf("please try again") >= 0
+          );
+        },
+        { timeout: 20000, polling: 500 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    await Promise.race([leftLogin, verifyFailed]);
+    await page.waitForTimeout(350).catch(() => {});
+    lap("natija (login/captcha)");
 
     if (!/\/login(\b|\/|$)/i.test(page.url().toLowerCase())) {
       return true; // login sahifasidan chiqdi — muvaffaqiyatli.
     }
-    // Hali login sahifasida — keyingi urinish (sahifa qayta yuklanadi).
+    // Hali login sahifasida (captcha rad etildi yoki timeout) — keyingi urinish
+    // (sahifa qayta yuklanadi, yangi Turnstile widget bilan).
   }
   return false;
 }
@@ -668,6 +687,7 @@ export async function detectCalendar(
   cfg: CalendarConfig = {},
 ): Promise<CalendarDetectResult> {
   const startedAt = Date.now();
+  const lap = makeLap();
   const email = cfg.email || envStr("SLOT_MONITOR_EMAIL") || null;
   const password = cfg.password || envStr("SLOT_MONITOR_PASSWORD") || null;
   const profileKey =
@@ -685,7 +705,6 @@ export async function detectCalendar(
   const noProxy = !slotCheckProxyEnabled();
   const target = { profileKey, noProxy };
   const pmeta = proxyMetaFor(target);
-  const waitMs = Number(process.env.BOOKING_CALENDAR_WAIT_MS || 9000);
   // Angular SPA (dropdown yoki login formasi) render bo'lishini kutish vaqti.
   const readyMs = Number(process.env.BOOKING_CALENDAR_READY_MS || 30000);
   const noSlotMarks = splitList(
@@ -737,6 +756,7 @@ export async function detectCalendar(
       { cdpProfileBase: slotMonitorProfileBase(), cdpFreshProfile: fresh },
     );
     closeSession = session.close;
+    lap("brauzer ochildi");
     // Resurs bloklash slot-monitor uchun DEFAULT O'CHIQ: autentifikatsiyalangan
     // dashboard/application-detail og'ir Angular bo'lib, bloklash "Loading"da
     // qotirishi mumkin. .env: SLOT_CHECK_BLOCK_RESOURCES=true bo'lsa yoqiladi.
@@ -774,9 +794,14 @@ export async function detectCalendar(
       await page
         .goto(loginUrl(), { waitUntil: "domcontentloaded", timeout: 45000 })
         .catch(() => {});
+      lap("goto loginUrl (origin)");
       if (await isAccountRestricted(page)) return "restricted";
       // 2) Saqlangan token'ni tiklaymiz (bo'lsa) — login so'ralmaydi.
-      await restoreSession(page, profileKey);
+      const hadToken = await restoreSession(page, profileKey);
+      // Token YO'Q bo'lsa — dashboard'ga borish behuda (baribir login'ga
+      // qaytaradi). To'g'ridan-to'g'ri "login" qaytaramiz: bitta ortiqcha
+      // navigatsiya + waitForDashboardOrLogin kutishi tejaladi.
+      if (!hadToken) return "login";
       // 3) Dashboard'ga o'tamiz.
       const resp = await page
         .goto(dashboardUrl(), {
@@ -786,17 +811,28 @@ export async function detectCalendar(
         .catch(() => null);
       base.statusCode = resp?.status() ?? base.statusCode;
       if (await isAccountRestricted(page)) return "restricted";
-      const dash = await waitForDashboardOrLogin(page, readyMs);
-      if (dash === "login") return "login";
+      const dash = await waitForDashboardOrLogin(
+        page,
+        readyMs,
+        () => apiUnauthorized,
+      );
+      if (dash === "login") {
+        // Token bor edi-yu, lekin dashboard ochilmadi (401 "Session Expired").
+        // Eskirgan sessiya faylini O'CHIRAMIZ — keyingi tekshiruv uni qayta
+        // sinamasin (sekin 401 yo'lini takrorlamasin), toza login qilsin.
+        clearSession(profileKey);
+        return "login";
+      }
       if (dash === "unknown") return "unknown";
       // Dashboard tayyor — token amal qilyapti. Yangilab saqlaymiz.
       await saveSession(page, profileKey);
       const clicked = await clickStartNewBooking(page);
       if (!clicked) return "unknown";
-      return waitForDetailOrLogin(page, readyMs);
+      return waitForDetailOrLogin(page, readyMs, () => apiUnauthorized);
     };
 
     let state = await gotoDetail();
+    lap(`gotoDetail: ${state}`);
 
     // Akkaunt 429001 bilan bloklangan — login QILMAYMIZ (ahvolni yomonlashtiradi).
     if (state === "restricted") {
@@ -817,13 +853,32 @@ export async function detectCalendar(
     const needLogin = state === "login" || apiUnauthorized;
 
     if (needLogin) {
+      // Token o'lik (yo'q, yo eskirgan/401) — saqlangan sessiyani O'CHIRAMIZ,
+      // keyingi tekshiruv uni qayta sinab vaqt sarflamasin (toza login qiladi).
+      clearSession(profileKey);
       // Login QILMAYMIZ (token tekshiruvi bosqichi) — yuqoriga xabar beramiz.
       if (!doLogin) {
         await closeSession();
         closeSession = null;
         return { needLogin: true };
       }
+      // COOLDOWN: yaqinda login qilingan bo'lsa — QAYTA LOGIN QILMAYMIZ
+      // (har login VFS 429001 blokini uzaytiradi). Cooldown tugashini kutamiz.
+      const cd = loginCooldownRemainingMin(profileKey);
+      if (cd > 0) {
+        await closeSession();
+        closeSession = null;
+        return {
+          ...base,
+          loggedIn: false,
+          note: `Token amal qilmadi, lekin login cooldown faol — ${cd} daqiqadan keyin qayta login (akkauntni charchatmaslik uchun).`,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+      // Login urinishini BELGILAYMIZ (cooldown shu vaqtdan boshlanadi).
+      markLoginAttempt(profileKey);
       const ok = await loginInSession(page, email!, password!);
+      lap(`loginInSession: ${ok}`);
       if (!ok) {
         base.screenshotPath = await maybeScreenshot(page, cfg.slotId);
         await closeSession();
@@ -882,18 +937,110 @@ export async function detectCalendar(
 
     // Detail'ga yetdik — eng yangi token'ni saqlaymiz (keyingi safar login yo'q).
     await saveSession(page, profileKey);
+    lap("detail tayyor + token saqlandi");
 
-    // 3 ta dropdownni tartib bilan tanlaymiz.
-    await selectDropdown(page, 0, centre, "application centre");
-    await selectDropdown(page, 1, category, "appointment category");
-    await selectDropdown(page, 2, subCategory, "sub-category");
+    // 3 ta dropdownni tartib bilan tanlaymiz. Variantlar ro'yxatini ham yig'amiz.
+    const dCentre = await selectDropdown(page, 0, centre, "application centre");
+    lap(
+      `dropdown1 centre: picked=${dCentre.picked} opts=${dCentre.options.length}`,
+    );
+    const dCategory = await selectDropdown(
+      page,
+      1,
+      category,
+      "appointment category",
+    );
+    lap(
+      `dropdown2 category: picked=${dCategory.picked} opts=${dCategory.options.length}`,
+    );
+    const dSub = await selectDropdown(page, 2, subCategory, "sub-category");
+    lap(`dropdown3 sub: picked=${dSub.picked} opts=${dSub.options.length}`);
 
+    // Sub-category category'ga BOG'LIQ — ba'zan VFS'dan kechroq yuklanadi.
+    // Bo'sh chiqsa (0 variant) bir marta qisqa kutib qayta urinamiz.
+    if (!dSub.picked && dSub.options.length === 0) {
+      await page.waitForTimeout(800);
+      const dSub2 = await selectDropdown(page, 2, subCategory, "sub-category");
+      lap(
+        `dropdown3 sub (retry): picked=${dSub2.picked} opts=${dSub2.options.length}`,
+      );
+      if (dSub2.options.length) dSub.options = dSub2.options;
+      dSub.picked = dSub.picked || dSub2.picked;
+    }
+
+    // Dropdownlar umuman yuklandimi? Centre (1-chi, mustaqil) bo'sh bo'lsa —
+    // detail sahifa to'g'ri render bo'lmagan (sessiya g'alati holat / Angular
+    // yuklanmadi). Bu SLOT HOLATI emas, balki tekshiruv bajarilmaganini bildiradi.
+    const dropdownsLoaded =
+      dCentre.picked ||
+      dCentre.options.length > 0 ||
+      dCategory.options.length > 0 ||
+      dSub.options.length > 0;
+
+    // KELAJAK uchun: o'qilgan dropdown variantlarini diskka saqlaymiz
+    // (uploads/slot-monitor-profiles/vfs-options-<key>.json) — formalarda
+    // centre/category/subCategory ro'yxatini ishlatish mumkin.
+    saveVfsOptions(profileKey, {
+      centre: dCentre.options,
+      category: dCategory.options,
+      subCategory: dSub.options,
+      selected: { centre, category, subCategory },
+    });
+
+    // VFS dropdownlardan KEYIN "Verify Captcha" (Cloudflare Turnstile) chiqaradi —
+    // u yechilmaguncha Continue yoqilmaydi va kalendar ko'rinmaydi. Avval auto-pass
+    // kutamiz (~3s), token kelmasa interaktiv checkbox'ni OS-klik bilan bosamiz.
+    // "Verify Captcha" INTERMITTENT (ba'zan umuman chiqmaydi) — chiqmasa widget
+    // paydo bo'lishini UZOQ (12s) kutmaymiz: appearMs qisqa (default 4s).
+    const ts = await solveTurnstile(page, {
+      step: (m) => lap(`turnstile: ${m}`),
+      appearMs: Number(process.env.BOOKING_VERIFY_CAPTCHA_APPEAR_MS || "4000"),
+    });
+    lap(`turnstile: present=${ts.present} solved=${ts.solved}`);
+
+    // "Verify Captcha" modalida "Submit" tugmasi bo'lsa — token olingach bosamiz
+    // (modal yopilib, kalendar/natija ko'rsatiladi). Disabled bo'lsa tegmaymiz.
+    if (ts.present) {
+      const submitted = await page
+        .evaluate(() => {
+          const btns = Array.from(
+            document.querySelectorAll("button, [role='button']"),
+          ) as HTMLElement[];
+          const submit = btns.find(
+            (b) => (b.textContent || "").trim().toLowerCase() === "submit",
+          );
+          if (
+            submit &&
+            !(submit as HTMLButtonElement).disabled &&
+            submit.getAttribute("aria-disabled") !== "true"
+          ) {
+            submit.click();
+            return true;
+          }
+          return false;
+        })
+        .catch(() => false);
+      if (submitted) {
+        lap("turnstile: Submit bosildi");
+        await page.waitForTimeout(800);
+      }
+    }
+
+    // Dropdownlardan keyin natija (kalendar/xabar) render bo'lishini kutamiz.
+    // Angular SPA ko'pincha "networkidle"ga YETMAYDI (uzluksiz polling) — shu
+    // sababli to'liq 9s kutib o'tirmaymiz. Qisqa, sozlanadigan kutish:
+    const settleMs = Number(process.env.BOOKING_CALENDAR_SETTLE_MS || 3500);
     await page
-      .waitForLoadState("networkidle", { timeout: waitMs })
+      .waitForLoadState("networkidle", { timeout: settleMs })
       .catch(() => {});
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(
+      Number(process.env.BOOKING_CALENDAR_READ_DELAY_MS || 600),
+    );
 
     const avail = await readAvailability(page, noSlotMarks, continueText);
+    lap(
+      `readAvailability: noSlot=${avail.noSlot} dates=${avail.availableDates.length}`,
+    );
     base.screenshotPath = await maybeScreenshot(page, cfg.slotId);
     base.finalUrl = page.url();
 
@@ -904,23 +1051,66 @@ export async function detectCalendar(
     base.availableDates = avail.availableDates;
     base.durationMs = Date.now() - startedAt;
 
-    if (avail.noSlot && avail.availableDates.length === 0) {
-      return { ...base, open: false, note: "Bo'sh slot yo'q (VFS xabari)" };
-    }
+    // ── 1) SLOT OCHIQ (bron qilsa bo'ladi) ──────────────────────────────────
+    // Bo'sh kun(lar) topildi YOKI Continue faol (sana keyingi bosqichda).
     if (avail.availableDates.length > 0) {
       return {
         ...base,
         open: true,
-        note: `${avail.availableDates.length} ta bo'sh kun topildi`,
+        note: `Slot OCHIQ — ${avail.availableDates.length} ta bo'sh kun bor`,
       };
     }
-    if (avail.continueEnabled || avail.calendarFound) {
+    if (avail.continueEnabled) {
       return {
         ...base,
         open: true,
-        note: avail.continueEnabled
-          ? "Continue faol — slot mavjud"
-          : "Kalendar ochildi — slot mavjud",
+        note: "Slot OCHIQ — Continue faol (sana mavjud)",
+      };
+    }
+
+    // ── 2) SLOT OCHIQ EMAS — VFS "bo'sh slot yo'q" xabari ────────────────────
+    // VFS aniq "no appointment slots currently available" deydi (Continue o'chiq).
+    if (avail.noSlot) {
+      return {
+        ...base,
+        open: false,
+        note: "Slot ochiq EMAS — bo'sh slot yo'q (VFS xabari)",
+      };
+    }
+
+    // ── 3) SLOT OCHILGAN, LEKIN BO'SH SLOT TUGAGAN ──────────────────────────
+    // Kalendar/sana tanlagich KO'RINADI, ammo tanlanadigan bo'sh kun yo'q va
+    // Continue ham o'chiq. Demak slot ochilgan edi, lekin bo'sh o'rinlar band
+    // qilib bo'lingan (tugagan).
+    if (avail.calendarFound) {
+      return {
+        ...base,
+        open: false,
+        note: "Slot ochilgan, lekin bo'sh slot TUGAGAN (kalendar bor, bo'sh kun yo'q)",
+      };
+    }
+
+    // ── 4) TEKSHIRUV BAJARILMADI — sahifa kerakli bosqichga yetmadi ─────────
+    // Na bo'sh kun, na "yo'q" xabari, na kalendar. Dropdownlar bo'sh bo'lsa,
+    // detail sahifa to'liq yuklanmagan (sessiya g'alati / Angular render qilmadi)
+    // — bu SLOT HOLATI emas, tekshiruv amalga oshmagani.
+    // VFS 500 (server) xatosi — alohida, qayta urinish kerak.
+    if (avail.errorPage || base.statusCode === 500) {
+      // 500 "ma'lumot mos kelmadi" — odatda eskirgan/buzilgan token shu URL'da
+      // 500 qaytaradi. Saqlangan sessiyani O'CHIRAMIZ: keyingi tekshiruv (login
+      // cooldown'ga rioya qilib) toza login qilib o'zini-o'zi tuzatadi.
+      clearSession(profileKey);
+      return {
+        ...base,
+        open: false,
+        note: "VFS server xatosi (500) — sessiya tozalandi, keyingi tekshiruvda qayta login",
+      };
+    }
+    if (!dropdownsLoaded) {
+      return {
+        ...base,
+        open: false,
+        note: "Tekshiruv bajarilmadi — sahifa yuklanmadi (dropdownlar bo'sh, qayta urinish kerak)",
       };
     }
     return {

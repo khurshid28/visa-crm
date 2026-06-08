@@ -80,6 +80,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Xvfb virtual ekran (Turnstile interaktiv checkbox uchun) — pastdagi
+    # entrypoint Xvfb ochib, so'ng worker'ni ishga tushiradi.
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"]
     command: npm run worker:order
     env_file:
       - .env
@@ -92,7 +95,11 @@ services:
       # CDP rejimi (Turnstile/Cloudflare) — real Google Chrome (Dockerfile o'rnatadi).
       BOOKING_CHROME_CDP: "true"
       BOOKING_CHROME_PATH: /usr/bin/google-chrome
-      BOOKING_HEADLESS: "true"
+      # Xvfb + NON-headless + OS-klik (login Turnstile interaktiv bo'lsa xdotool).
+      BOOKING_XVFB: "true"
+      DISPLAY: ":99"
+      BOOKING_HEADLESS: "false"
+      BOOKING_OS_CLICK: "true"
     volumes:
       - .:/app
       - app_node_modules:/app/node_modules
@@ -118,6 +125,9 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: visa-crm-slot-worker
+    # Xvfb virtual ekranni ochib, so'ng worker'ni ishga tushiramiz (Turnstile
+    # interaktiv checkbox uchun NON-headless Chrome + xdotool OS-klik kerak).
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"]
     command: npm run worker:slot
     env_file:
       - .env
@@ -130,7 +140,13 @@ services:
       # CDP rejimi (Turnstile/Cloudflare) — real Google Chrome (Dockerfile o'rnatadi).
       BOOKING_CHROME_CDP: "true"
       BOOKING_CHROME_PATH: /usr/bin/google-chrome
-      BOOKING_HEADLESS: "true"
+      # Xvfb + NON-headless + OS-klik: interaktiv Turnstile checkbox chiqsa, uni
+      # haqiqiy kursor (xdotool) bilan bosamiz. CDP auto-pass baribir birinchi
+      # sinaladi; OS-klik faqat token kelmaganda (interaktiv) ishga tushadi.
+      BOOKING_XVFB: "true"
+      DISPLAY: ":99"
+      BOOKING_HEADLESS: "false"
+      BOOKING_OS_CLICK: "true"
       # Slot-monitor token/sessiyasi doimiy volume'da saqlansin (qayta login kam).
       SLOT_MONITOR_PROFILE_DIR: /profiles/slot-monitor
     volumes:

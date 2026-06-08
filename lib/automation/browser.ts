@@ -25,6 +25,14 @@ export function envHeadless(): boolean {
   return v !== "false" && v !== "0";
 }
 
+// OS-darajasidagi sichqoncha kliki (osClickTurnstile) uchun: oxirgi o'zimiz
+// ishga tushirgan chrome.exe ning PID'i. Windows'da oynani foreground'ga
+// ko'tarish (SetForegroundWindow) shu PID orqali topiladi.
+let lastSpawnedChromePid: number | null = null;
+export function getLastChromePid(): number | null {
+  return lastSpawnedChromePid;
+}
+
 // Chromium'ni "boshqarilayotgan brauzer" belgilarisiz ishga tushirish argumentlari.
 // --disable-blink-features=AutomationControlled => navigator.webdriver yo'qoladi.
 export function launchArgs(): string[] {
@@ -245,6 +253,14 @@ async function applyStealthInit(
               ? Promise.resolve({ state: Notification.permission })
               : orig(p);
         }
+        // TEZLIK: smooth-scroll animatsiyasini O'CHIRAMIZ. VFS sahifasi
+        // `scroll-behavior: smooth` ishlatadi — scrollIntoView / click avto-scroll
+        // har safar 2-3s animatsiya qiladi va Playwright uni kutadi (behuda vaqt).
+        // Global `scroll-behavior: auto` bilan barcha scroll BIR ZUMDA bo'ladi.
+        const s = document.createElement("style");
+        s.textContent =
+          "html,body,*{scroll-behavior:auto !important}";
+        (document.documentElement || document.head)?.appendChild(s);
       } catch {
         /* ignore */
       }
@@ -663,7 +679,15 @@ async function connectRealChrome(opts?: {
   const port = await findFreePort();
   // Docker/Linux: ekran yo'q => headless kerak; sandbox root'da ishlamaydi.
   const isLinux = process.platform !== "win32";
-  const headless = envHeadless();
+  // Linux'da DISPLAY (Xvfb) bo'lsa NON-headless ishlay olamiz — bu Turnstile
+  // interaktiv checkbox + xdotool OS-klik uchun zarur. DISPLAY yo'q bo'lsa
+  // (oddiy headless konteyner) Chrome ko'rinadigan rejimda ishga tushmaydi,
+  // shuning uchun xavfsizlik uchun headless'ga qaytaramiz.
+  const hasDisplay = !!(process.env.DISPLAY || "").trim();
+  let headless = envHeadless();
+  if (isLinux && !headless && !hasDisplay) {
+    headless = true; // ekran yo'q — majburan headless (aks holda Chrome yiqiladi)
+  }
   const dockerArgs: string[] = [];
   if (isLinux) {
     // Konteynerda root => --no-sandbox shart. /dev/shm kichik => disable.
@@ -671,6 +695,11 @@ async function connectRealChrome(opts?: {
     if (headless) {
       // Yangi headless rejimi — haqiqiy Chrome'ga eng yaqin (Turnstile uchun).
       dockerArgs.push("--headless=new", "--disable-gpu");
+    } else {
+      // Xvfb virtual ekranida KO'RINADIGAN oyna — xdotool OS-klik koordinatasi
+      // aniq bo'lishi uchun oynani 0,0 ga belgilangan o'lchamda ochamiz.
+      const size = (process.env.BOOKING_WINDOW_SIZE || "1280,1024").trim();
+      dockerArgs.push("--window-position=0,0", `--window-size=${size}`);
     }
   }
   const args = [
@@ -696,6 +725,8 @@ async function connectRealChrome(opts?: {
     detached: false,
     stdio: "ignore",
   });
+  // OS-click (Turnstile fizik klik) uchun PID'ni eslab qolamiz.
+  lastSpawnedChromePid = child.pid ?? null;
 
   const cleanupProxy = async () => {
     if (localProxyUrl) {

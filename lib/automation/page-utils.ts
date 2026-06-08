@@ -3,10 +3,10 @@
 // ====================================================================
 //  Bu modul Playwright Page bilan ishlaydigan umumiy yordamchilar:
 //   - forma: fillSmartField, fillFieldReliably, clickSubmit
-//   - cookie/captcha: acceptCookies, clickTurnstile, waitForCloudflareClear,
-//     waitForTurnstile
+//   - cookie: acceptCookies
 //   - token/IP: readExitIp, readAuthToken, extractTokenFromBody
 //   - debug: dumpDebug, dumpStorage, extractRef
+//  (Cloudflare/Turnstile mantig'i alohida ./turnstile modulida.)
 // ====================================================================
 
 import * as fs from "fs";
@@ -371,17 +371,31 @@ export async function fillFieldReliably(
   el: import("playwright").Locator,
   value: string,
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // TEZ YO'L: fill() qiymatni darrov qo'yadi va 'input' eventini yuboradi —
+  // Angular Material formControl buni ko'radi (Sign In tugmasi yonadi). Ko'p
+  // hollarda shu yetarli va char-by-char yozishdan ~10x tezroq.
+  try {
+    await el.click({ timeout: 4000 }).catch(() => {});
+    await el.fill(value, { timeout: 5000 });
+    if ((await el.inputValue().catch(() => "")) === value) {
+      await humanPause(50, 120);
+      return true;
+    }
+  } catch {
+    /* sekin yo'lga o'tamiz */
+  }
+  // SEKIN YO'L (zaxira): forma keydown/keyup talab qilsa — char-by-char.
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await el.click({ timeout: 5000 }).catch(() => {});
       await el.fill("", { timeout: 3000 }).catch(() => {});
       await page.keyboard.press("Control+A").catch(() => {});
       await page.keyboard.press("Delete").catch(() => {});
       // Inson kabi, lekin tezroq yozish (captcha baribir o'tadi). .env bilan
-      // sozlanadi: BOOKING_TYPE_DELAY_MS (default 35) — past=tezroq.
-      const typeBase = Number(process.env.BOOKING_TYPE_DELAY_MS || "35");
+      // sozlanadi: BOOKING_TYPE_DELAY_MS (default 12) — past=tezroq.
+      const typeBase = Number(process.env.BOOKING_TYPE_DELAY_MS || "12");
       await el.type(value, {
-        delay: rand(typeBase, typeBase + 45),
+        delay: rand(typeBase, typeBase + 25),
         timeout: 15000,
       });
       await humanPause(80, 180);
@@ -434,214 +448,6 @@ export async function acceptCookies(
     }
   }
   return false;
-}
-
-/**
- * Turnstile checkbox'i interaktiv ("Verify you are human") bo'lsa — uni bosadi.
- * 1) Avval iframe ICHIDAGI checkbox'ni to'g'ridan-to'g'ri bosishga urinamiz
- *    (Playwright frameLocator — eng ishonchli).
- * 2) Bo'lmasa — koordinata bo'yicha (iframe chap qismi) inson kabi bosamiz.
- * Har bosishdan keyin token kelishini uzoqroq kutamiz. Hech qachon throw qilmaydi.
- */
-export async function clickTurnstile(
-  page: import("playwright").Page,
-): Promise<boolean> {
-  const hasToken = () =>
-    page
-      .evaluate(() => {
-        const el = document.querySelector(
-          'input[name="cf-turnstile-response"]',
-        ) as HTMLInputElement | null;
-        return !!el && !!el.value && el.value.length > 30;
-      })
-      .catch(() => false);
-
-  try {
-    const iframeSel =
-      'iframe[src*="challenges.cloudflare.com"], .cf-turnstile iframe, #widgetId iframe';
-    const frameEl = await page
-      .waitForSelector(iframeSel, { state: "visible", timeout: 6000 })
-      .catch(() => null);
-    if (!frameEl) return false;
-
-    // --- 1-usul: iframe ichidagi checkbox'ni frameLocator bilan bosamiz ---
-    try {
-      const fl = page.frameLocator(iframeSel).first();
-      const candidates = [
-        fl.locator('input[type="checkbox"]'),
-        fl.getByLabel(/verify you are human|i am human|human/i),
-        fl.locator("label"),
-        fl.locator("body"),
-      ];
-      for (const c of candidates) {
-        if ((await c.count().catch(() => 0)) > 0) {
-          await c
-            .first()
-            .click({ timeout: 4000, force: true })
-            .catch(() => {});
-          // Token kelishini kutamiz (3-8s bo'lishi mumkin).
-          for (let w = 0; w < 16; w++) {
-            await page.waitForTimeout(500).catch(() => {});
-            if (await hasToken()) return true;
-          }
-        }
-      }
-    } catch {
-      /* frameLocator ishlamadi — koordinataga o'tamiz */
-    }
-
-    // --- 2-usul: koordinata bo'yicha (iframe chap qismidagi checkbox) ---
-    const box = await frameEl.boundingBox().catch(() => null);
-    if (!box) return false;
-    const tries = rand(2, 4);
-    for (let i = 0; i < tries; i++) {
-      // Checkbox odatda chap chetda (~30px). Tor diapazonda aniqroq bosamiz.
-      const x = box.x + rand(24, 44);
-      const y = box.y + box.height / 2 + rand(-4, 4);
-      await page.mouse.move(x - rand(20, 60), y - rand(10, 30)).catch(() => {});
-      await page.waitForTimeout(rand(120, 320)).catch(() => {});
-      await page.mouse.move(x, y).catch(() => {});
-      await page.waitForTimeout(rand(80, 200)).catch(() => {});
-      await page.mouse.click(x, y).catch(() => {});
-      // Token kelishini uzoqroq kutamiz.
-      for (let w = 0; w < 12; w++) {
-        await page.waitForTimeout(500).catch(() => {});
-        if (await hasToken()) return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Cloudflare "Just a moment" / "Checking your browser" interstitial (managed
- * challenge) hal bo'lishini kutadi. Sahifa challenge'da bo'lsa, JS challenge
- * avtomatik bajarilib, asl sahifaga o'tishini kutamiz. Hech qachon throw qilmaydi.
- *  - true: challenge yo'q yoki hal bo'ldi (asl sahifa ko'rindi).
- *  - false: vaqt tugadi, hali ham challenge/blokda.
- */
-export async function waitForCloudflareClear(
-  page: import("playwright").Page,
-  step?: (m: string) => void,
-): Promise<boolean> {
-  const timeoutMs = Number(
-    process.env.BOOKING_CF_CHALLENGE_TIMEOUT_MS || "45000",
-  );
-  const isChallenge = async (): Promise<boolean> => {
-    try {
-      return await page.evaluate(() => {
-        const t = (document.title || "").toLowerCase();
-        const b = (document.body?.innerText || "").toLowerCase();
-        const marks = [
-          "just a moment",
-          "checking your browser",
-          "verify you are human",
-          "needs to review the security",
-          "attention required",
-        ];
-        const hit = marks.some((m) => t.includes(m) || b.includes(m));
-        // Challenge sahifasida odatda asosiy app (app-login/app-root) bo'lmaydi.
-        const hasApp = !!document.querySelector(
-          "app-login, app-root, #email, form",
-        );
-        return hit && !hasApp;
-      });
-    } catch {
-      return false;
-    }
-  };
-
-  if (!(await isChallenge())) return true;
-  step?.("Cloudflare challenge aniqlandi, hal bo'lishi kutilmoqda...");
-
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(2000).catch(() => {});
-    if (!(await isChallenge())) {
-      step?.("Cloudflare challenge hal bo'ldi ✓");
-      // App to'liq yuklanishi uchun biroz kutamiz.
-      await page
-        .waitForLoadState("networkidle", { timeout: 8000 })
-        .catch(() => {});
-      return true;
-    }
-  }
-  step?.("Cloudflare challenge hal bo'lmadi ✗");
-  return false;
-}
-
-/**
- * Cloudflare Turnstile captcha'ni aniqlaydi va token to'lguncha kutadi.
- * Widget kech render bo'lishi mumkin (Angular SPA) — shu sababli avval
- * widget PAYDO BO'LISHINI biroz kutamiz, keyin token kutamiz.
- */
-export async function waitForTurnstile(
-  page: import("playwright").Page,
-): Promise<{ present: boolean; solved: boolean }> {
-  const timeoutMs = Number(process.env.BOOKING_CAPTCHA_TIMEOUT_MS || "30000");
-  // Widget paydo bo'lishini kutish vaqti (sahifa to'liq yuklanishini kutmaymiz,
-  // shuning uchun Turnstile kech render bo'lishi mumkin).
-  const appearMs = Number(process.env.BOOKING_CAPTCHA_APPEAR_MS || "12000");
-  try {
-    // Widget paydo bo'lishini kutamiz (iframe / hidden input / .cf-turnstile).
-    await page
-      .waitForFunction(
-        () => {
-          const hasInput = !!document.querySelector(
-            'input[name="cf-turnstile-response"], [id^="cf-chl-widget"]',
-          );
-          const hasWidget = !!document.querySelector(
-            '.cf-turnstile, iframe[src*="challenges.cloudflare.com"]',
-          );
-          return hasInput || hasWidget;
-        },
-        { timeout: appearMs },
-      )
-      .catch(() => {});
-
-    // Widget bormi? (iframe yoki hidden input yoki .cf-turnstile konteyner)
-    const present = await page
-      .evaluate(() => {
-        const hasInput = !!document.querySelector(
-          'input[name="cf-turnstile-response"], [id^="cf-chl-widget"]',
-        );
-        const hasWidget = !!document.querySelector(
-          '.cf-turnstile, iframe[src*="challenges.cloudflare.com"]',
-        );
-        return hasInput || hasWidget;
-      })
-      .catch(() => false);
-
-    if (!present) return { present: false, solved: false };
-
-    // Token to'lguncha kutamiz (cf-turnstile-response value uzunligi > 30).
-    await page
-      .waitForFunction(
-        () => {
-          const el = document.querySelector(
-            'input[name="cf-turnstile-response"]',
-          ) as HTMLInputElement | null;
-          return !!el && !!el.value && el.value.length > 30;
-        },
-        { timeout: timeoutMs },
-      )
-      .catch(() => {});
-
-    const solved = await page
-      .evaluate(() => {
-        const el = document.querySelector(
-          'input[name="cf-turnstile-response"]',
-        ) as HTMLInputElement | null;
-        return !!el && !!el.value && el.value.length > 30;
-      })
-      .catch(() => false);
-
-    return { present: true, solved };
-  } catch {
-    return { present: false, solved: false };
-  }
 }
 
 /** Forma yuborish tugmasini topib bosadi. */
