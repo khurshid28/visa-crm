@@ -167,6 +167,10 @@ export function proxyMetaFor(target: ProxyTarget): ProxyMeta | null {
     pickKey = sanitizeSession(target.profileKey || "") || "rotating";
   } else {
     session = sanitizeSession(target.profileKey) || "shared";
+    // IP salt (ipAttempt>0) — proxyFor bilan bir xil: yangi IP => yangi session id.
+    if (target.ipAttempt && target.ipAttempt > 0) {
+      session = `${session}a${target.ipAttempt}`;
+    }
     pickKey = session;
   }
   const country = list.length ? list[stableHash(pickKey) % list.length] : "";

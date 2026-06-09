@@ -86,6 +86,13 @@ export async function loginToBooking(
       1,
       Number(process.env.BOOKING_PROXY_IP_RETRIES || "4"),
     );
+    // Boshlang'ich IP "salt" (.env: BOOKING_PROXY_IP_START, default 0). Akkauntning
+    // asosiy sticky IP'si rate-limit (429) bo'lib qolsa, 1+ qo'yib BIRINCHI
+    // urinishdanoq YANGI sticky IP'dan boshlash mumkin (o'sha akkaunt, boshqa IP).
+    const ipStart = Math.max(
+      0,
+      Number(process.env.BOOKING_PROXY_IP_START || "0"),
+    );
     const proxyOn = isProxyEnabled() && !opts?.noProxy;
 
     // Login POST javobidan token'ni TUTIB OLAMIZ (eng ishonchli yo'l): VFS
@@ -115,7 +122,7 @@ export async function loginToBooking(
 
       const session = await openBrowserContext(
         profileDirFor("login", profileKey),
-        { profileKey, ipAttempt: attempt, noProxy: opts?.noProxy },
+        { profileKey, ipAttempt: ipStart + attempt, noProxy: opts?.noProxy },
         {
           cdpProfileBase: opts?.cdpProfileBase,
           cdpFreshProfile: opts?.cdpFreshProfile,

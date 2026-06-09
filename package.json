@@ -12,6 +12,7 @@
     "worker:slot": "tsx scripts/slot-worker.ts",
     "worker:mail": "tsx scripts/mail-worker.ts",
     "slot:check": "tsx scripts/slot-check-test.ts",
+    "proxy:check": "tsx scripts/proxy-check.ts",
     "captcha:click": "tsx scripts/captcha-click-test.ts",
     "osclick:proof": "tsx scripts/os-click-proof.ts",
     "turnstile:test": "tsx scripts/turnstile-real-test.ts",
