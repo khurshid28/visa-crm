@@ -34,6 +34,17 @@ export { runActivation } from "./activation";
 export { checkSlotOpen } from "./slot";
 export { detectCalendar } from "./calendar";
 
+// Flow capture — slot ochilgandan keyingi noma'lum sahifalarni qo'lda
+// o'tib yozib olish (skrinshot + HTML + network + PDF + manifest). Lokal tahlil.
+export { runFlowCapture } from "./flow-capture";
+export type {
+  FlowCaptureOptions,
+  FlowCaptureResult,
+  CapturedSnapshot,
+  CapturedNet,
+  CapturedDownload,
+} from "./flow-capture";
+
 // Cloudflare Turnstile / challenge yechuvchi (qayta ishlatiladigan).
 export {
   solveTurnstile,

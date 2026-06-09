@@ -20,6 +20,7 @@
     "register:test": "tsx scripts/register-test.ts",
     "mail:test": "tsx scripts/mail-test.ts",
     "mail:watch": "tsx scripts/mail-test.ts --watch",
+    "flow:capture": "tsx scripts/flow-capture.ts",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio"
