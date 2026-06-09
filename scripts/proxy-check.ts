@@ -58,9 +58,7 @@ async function main() {
     return;
   }
 
-  const target = rotating
-    ? { rotating: true }
-    : { profileKey: key, ipAttempt };
+  const target = rotating ? { rotating: true } : { profileKey: key, ipAttempt };
   const cfg = proxyFor(target);
   const meta = proxyMetaFor(target);
   if (!cfg) {

@@ -289,141 +289,191 @@ async function applyStealthInit(
       }
     }, langs)
     .catch(() => {});
-  // WebRTC IP leak himoyasi (JS qatlami) — alohida init-script.
-  await applyWebrtcGuard(context);
-  // Apparat fingerprint: WebGL renderer + CPU yadrolari + RAM (server izini yashirish).
-  await applyHardwareSpoof(context, profileKey);
+  // WebRTC IP leak himoyasi + apparat fingerprint (WebGL/CPU/RAM) — launch
+  // yo'lida string init-script sifatida (CDP yo'li raw CDP bilan injeksiya qiladi).
+  await applyStealthSources(context, profileKey);
 }
 
 // WEBRTC IP LEAK (JS qatlami) — Chrome bayrog'i (webrtcLeakArgs) ustiga ikkinchi
 // himoya qatlami. ICE candidate'lardagi IP'li (host/srflx) nomzodlarni yutadi,
-// shunda RTCPeerConnection real local/server IP'ni sahifaga bermaydi. Launch
-// (applyStealthInit) va CDP (connectRealChrome) — ikkala yo'lda ishlatiladi.
-// .env: BOOKING_WEBRTC_PROTECT=false bo'lsa o'chadi.
-async function applyWebrtcGuard(
-  context: import("playwright").BrowserContext,
-): Promise<void> {
+// shunda RTCPeerConnection real local/server IP'ni sahifaga bermaydi.
+// MUHIM: bu SOURCE STRING qaytaradi (funksiya EMAS) — esbuild/tsx string'ni
+// O'ZGARTIRMAYDI, shuning uchun __name gotcha YO'Q. String launch yo'lida
+// context.addInitScript(src), CDP yo'lida raw CDP (addScriptToEvaluateOnNewDocument)
+// bilan injeksiya qilinadi. .env: BOOKING_WEBRTC_PROTECT=false bo'lsa null.
+function webrtcGuardSource(): string | null {
   if (
     (process.env.BOOKING_WEBRTC_PROTECT || "").trim().toLowerCase() === "false"
   ) {
-    return;
+    return null;
   }
-  await context
-    .addInitScript(() => {
-      try {
-        const RTC: any =
-          (window as any).RTCPeerConnection ||
-          (window as any).webkitRTCPeerConnection ||
-          (window as any).mozRTCPeerConnection;
-        if (!RTC) return;
-        // __name gotcha'dan qochish: `const Patched = function` EMAS (esbuild/tsx
-        // uni __name() bilan o'raydi -> browserda ReferenceError -> guard jim o'ladi).
-        // O'RNIGA anonim funksiyani TO'G'RIDAN-TO'G'RI window member'iga tayinlaymiz
-        // (member-assignment'ga esbuild named-eval/__name qo'shmaydi).
-        (window as any).RTCPeerConnection = function (
-          this: any,
-          ...rtcArgs: any[]
-        ) {
-          const pc = new RTC(...rtcArgs);
-          const origAdd = pc.addEventListener?.bind(pc);
-          if (origAdd) {
-            pc.addEventListener = (type: string, cb: any, ...rest: any[]) => {
-              if (type === "icecandidate" && typeof cb === "function") {
-                return origAdd(
-                  type,
-                  (ev: any) => {
-                    if (
-                      ev &&
-                      ev.candidate &&
-                      /(\d{1,3}\.){3}\d{1,3}|[a-f0-9]{0,4}:[a-f0-9:]+/i.test(
-                        ev.candidate.candidate || "",
-                      )
-                    ) {
-                      return; // IP'li candidate'ni yutamiz (sizdirmaymiz)
-                    }
-                    return cb(ev);
-                  },
-                  ...rest,
-                );
+  return `(function () {
+  try {
+    var RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+    if (!RTC) return;
+    var Wrapped = function () {
+      var pc = new RTC(...arguments);
+      var origAdd = pc.addEventListener ? pc.addEventListener.bind(pc) : null;
+      if (origAdd) {
+        pc.addEventListener = function (type, cb) {
+          var rest = Array.prototype.slice.call(arguments, 2);
+          if (type === "icecandidate" && typeof cb === "function") {
+            return origAdd.apply(null, [type, function (ev) {
+              if (ev && ev.candidate && /(\\d{1,3}\\.){3}\\d{1,3}|[a-f0-9]{0,4}:[a-f0-9:]+/i.test(ev.candidate.candidate || "")) {
+                return;
               }
-              return origAdd(type, cb, ...rest);
-            };
+              return cb(ev);
+            }].concat(rest));
           }
-          return pc;
+          return origAdd.apply(null, [type, cb].concat(rest));
         };
-        (window as any).RTCPeerConnection.prototype = RTC.prototype;
-        (window as any).webkitRTCPeerConnection = (
-          window as any
-        ).RTCPeerConnection;
-      } catch {
-        /* ignore */
       }
-    })
-    .catch(() => {});
+      return pc;
+    };
+    Wrapped.prototype = RTC.prototype;
+    window.RTCPeerConnection = Wrapped;
+    window.webkitRTCPeerConnection = Wrapped;
+  } catch (e) {}
+})();`;
 }
 
 // APPARAT FINGERPRINT (server izini yashirish) — WebGL renderer + CPU + RAM.
-// Server (Docker/Xvfb)da Chrome WebGL'da "Google SwiftShader" / "llvmpipe"
-// qaytaradi — bu "men data-markaz/serverman" degan KUCHLI signal. Bu yerda real
-// Windows GPU (UA'dagi Windows bilan MOS) ko'rsatamiz. navigator.hardwareConcurrency
-// (CPU yadrolari) va deviceMemory (RAM) ham uy kompyuteri qiymatlariga moslanadi
-// (server odatda ko'p yadroli). Har profileKey o'z qiymatini BARQAROR oladi.
-// .env: BOOKING_HW_SPOOF=false bo'lsa butunlay o'chadi.
-async function applyHardwareSpoof(
+// Server (Docker/Xvfb)da Chrome WebGL'da "Google SwiftShader"/"llvmpipe" beradi —
+// bu "men serverman" degan KUCHLI signal. Bu yerda real Windows GPU ko'rsatamiz,
+// hardwareConcurrency/deviceMemory uy-kompyuter qiymatlariga moslanadi (per
+// profileKey BARQAROR). SOURCE STRING qaytaradi (qiymatlar JSON bilan ichiga
+// quyiladi -> __name gotcha YO'Q). .env: BOOKING_HW_SPOOF=false bo'lsa null.
+//
+// "IDEAL" daraja (spoof'ni ANIQLAB BO'LMASIN — anti-bot skript sezmasin):
+//  1) toString NIQOBI — patch qilingan funksiyalar .toString() da "[native code]"
+//     qaytaradi (override izi yashirinadi). Niqob o'zini ham native ko'rsatadi.
+//  2) hardwareConcurrency/deviceMemory NAVIGATOR.PROTOTYPE da (instansiyada EMAS) —
+//     native joyida turadi, navigator.hasOwnProperty(...) === false (xuddi haqiqiy).
+//  3) getter'lar va getParameter NIQOB ostida — .toString() native ko'rinadi.
+function hardwareSpoofSource(profileKey?: string | null): string | null {
+  if ((process.env.BOOKING_HW_SPOOF || "").trim().toLowerCase() === "false") {
+    return null;
+  }
+  const hw = hardwareFp(profileKey);
+  return `(function () {
+  try {
+    var data = ${JSON.stringify(hw)};
+
+    // ── 1) toString NIQOBI: patch qilingan funksiyalar "[native code]" qaytarsin. ──
+    // Function.prototype.toString ni Proxy bilan o'raymiz; WeakMap'dagi funksiyalar
+    // uchun native-ko'rinishli satr qaytaramiz, qolganlari uchun haqiqiy toString.
+    var _nts = Function.prototype.toString;
+    var _masks = new WeakMap();
+    function _nat(name) { return "function " + name + "() { [native code] }"; }
+    function _mask(fn, name) { try { _masks.set(fn, _nat(name)); } catch (e) {} return fn; }
+    var _tsp = new Proxy(_nts, {
+      apply: function (target, thisArg, args) {
+        if (thisArg && _masks.has(thisArg)) return _masks.get(thisArg);
+        return Reflect.apply(target, thisArg, args);
+      }
+    });
+    Function.prototype.toString = _tsp;
+    _masks.set(_tsp, _nat("toString")); // niqobning o'zi ham native ko'rinadi
+
+    // ── 2) CPU yadrolari + RAM: NAVIGATOR.PROTOTYPE da (native joyida). ──
+    function _defNav(prop, val) {
+      try {
+        var getter = function () { return val; };
+        _mask(getter, "get " + prop); // getter .toString() native ko'rinadi
+        var target = (window.Navigator && window.Navigator.prototype) || navigator;
+        Object.defineProperty(target, prop, {
+          get: getter, configurable: true, enumerable: true
+        });
+      } catch (e) {}
+    }
+    if (data.cores > 0) _defNav("hardwareConcurrency", data.cores);
+    if (data.memory > 0) _defNav("deviceMemory", data.memory);
+
+    // ── 3) WebGL UNMASKED vendor(37445)/renderer(37446) — WebGL + WebGL2. ──
+    var protos = [
+      window.WebGLRenderingContext && window.WebGLRenderingContext.prototype,
+      window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype
+    ];
+    for (var i = 0; i < protos.length; i++) {
+      var proto = protos[i];
+      if (!proto || !proto.getParameter) continue;
+      proto.getParameter = (function (orig) {
+        var patched = function (p) {
+          if (p === 37445) return data.vendor;
+          if (p === 37446) return data.renderer;
+          return orig.call(this, p);
+        };
+        _mask(patched, "getParameter"); // getParameter .toString() native ko'rinadi
+        return patched;
+      })(proto.getParameter);
+    }
+  } catch (e) {}
+})();`;
+}
+
+// Stealth source'larni LAUNCH yo'lida qo'llaymiz (Playwright-managed context —
+// addInitScript string'ni qabul qiladi va ishonchli ishlaydi).
+async function applyStealthSources(
   context: import("playwright").BrowserContext,
   profileKey?: string | null,
 ): Promise<void> {
-  if ((process.env.BOOKING_HW_SPOOF || "").trim().toLowerCase() === "false") {
-    return;
+  const sources = [webrtcGuardSource(), hardwareSpoofSource(profileKey)].filter(
+    (s): s is string => !!s,
+  );
+  for (const src of sources) {
+    await context.addInitScript(src).catch(() => {});
   }
-  const hw = hardwareFp(profileKey);
-  await context
-    .addInitScript(
-      (data: {
-        vendor: string;
-        renderer: string;
-        cores: number;
-        memory: number;
-      }) => {
-        try {
-          if (data.cores > 0) {
-            Object.defineProperty(navigator, "hardwareConcurrency", {
-              get: () => data.cores,
-              configurable: true,
-            });
-          }
-          if (data.memory > 0) {
-            Object.defineProperty(navigator, "deviceMemory", {
-              get: () => data.memory,
-              configurable: true,
-            });
-          }
-          // WebGL UNMASKED_VENDOR_WEBGL=37445, UNMASKED_RENDERER_WEBGL=37446.
-          // Ikkala kontekst prototipida ham getParameter'ni almashtiramiz.
-          // __name gotcha'dan qochish: member-assignment'ga anonim `function`
-          // (NE `const x = function`) + this'ni saqlash uchun arrow EMAS.
-          const protos: any[] = [
-            (window as any).WebGLRenderingContext &&
-              (window as any).WebGLRenderingContext.prototype,
-            (window as any).WebGL2RenderingContext &&
-              (window as any).WebGL2RenderingContext.prototype,
-          ];
-          for (const proto of protos) {
-            if (!proto || !proto.getParameter) continue;
-            const orig = proto.getParameter;
-            proto.getParameter = function (this: any, p: number) {
-              if (p === 37445) return data.vendor;
-              if (p === 37446) return data.renderer;
-              return orig.call(this, p);
-            };
-          }
-        } catch {
-          /* ignore */
-        }
-      },
-      hw,
-    )
-    .catch(() => {});
+}
+
+// CDP yo'lida stealth source'larni RAW CDP bilan injeksiya qilamiz —
+// page.addInitScript/context.addInitScript connectOverCDP'da ISHLAMAYDI
+// (no-op; runtime stealth:check bilan tasdiqlandi: applyAll xatosiz tugaydi,
+// lekin skript bajarilmaydi). Page.addScriptToEvaluateOnNewDocument esa Chrome'ga
+// to'g'ridan-to'g'ri tushadi va keyingi har bir hujjatda ishlaydi. Sessiyani
+// DETACH QILMAYMIZ — detach skript ro'yxatini tozalashi mumkin (page yopilganda
+// avtomatik tozalanadi).
+async function injectCdpSources(
+  context: import("playwright").BrowserContext,
+  page: import("playwright").Page,
+  profileKey?: string | null,
+): Promise<void> {
+  const sources = [webrtcGuardSource(), hardwareSpoofSource(profileKey)].filter(
+    (s): s is string => !!s,
+  );
+  if (!sources.length) return;
+  const client = await context.newCDPSession(page);
+  await client.send("Page.enable").catch(() => {});
+  for (const source of sources) {
+    await client
+      .send("Page.addScriptToEvaluateOnNewDocument", { source })
+      .catch(() => {});
+  }
+}
+
+// CDP (connectOverCDP) yo'lida context.addInitScript VA page.addInitScript YANGI
+// hujjatlarga ISHLAMAYDI (no-op — runtime stealth:check bilan tasdiqlandi: wrap
+// chaqirildi, applyAll xatosiz tugadi, lekin skript bajarilmadi). Shuning uchun
+// CDP'da context.newPage'ni O'RAYMIZ va spoof'ni RAW CDP (injectCdpSources ->
+// Page.addScriptToEvaluateOnNewDocument) bilan AWAIT qilib injeksiya qilamiz —
+// page qaytishidan oldin tugaydi, shunda caller'ning goto'si POYGA QILMAYDI.
+// context.on("page") zaxira handler QO'YMAYMIZ (u await kafolatini buzardi).
+// Booking callerlari faqat newPage ishlatadi; Turnstile sahifa ICHIDAGI iframe'da.
+async function applyCdpStealth(
+  context: import("playwright").BrowserContext,
+  profileKey?: string | null,
+): Promise<void> {
+  // newPage'ni o'raymiz: AWAIT bilan -> raw CDP injeksiya goto'dan oldin tugaydi.
+  // context.newPage() argumentsiz (Playwright — page opsiyalari context darajasida).
+  const origNewPage = context.newPage.bind(context);
+  (context as any).newPage = async () => {
+    const page = await origNewPage();
+    await injectCdpSources(context, page, profileKey).catch(() => {});
+    return page;
+  };
+  // Mavjud page(lar) (spawn'dagi about:blank) — best-effort.
+  for (const p of context.pages()) {
+    await injectCdpSources(context, p, profileKey).catch(() => {});
+  }
 }
 
 // Real brauzerga o'xshatish uchun fingerprint sozlamalari (.env'dan override).
@@ -464,6 +514,7 @@ function fpHash(key: string): number {
 // tanlaydi. .env override: BOOKING_WEBGL_VENDOR / BOOKING_WEBGL_RENDERER /
 // BOOKING_HW_CORES / BOOKING_HW_MEMORY.
 type HwFp = { vendor: string; renderer: string; cores: number; memory: number };
+export type { HwFp };
 const GPU_POOL: Array<{ vendor: string; renderer: string }> = [
   {
     vendor: "Google Inc. (Intel)",
@@ -491,7 +542,7 @@ const CORES_POOL = [4, 8, 8, 12, 16];
 const MEM_POOL = [8, 8, 4, 8];
 
 // profileKey'dan barqaror apparat fingerprint (vendor/renderer/cores/memory).
-function hardwareFp(profileKey?: string | null): HwFp {
+export function hardwareFp(profileKey?: string | null): HwFp {
   const key = (profileKey || "").trim().toLowerCase();
   const h = key ? fpHash(key) : 0;
   const gpu = GPU_POOL[h % GPU_POOL.length];
@@ -1013,10 +1064,9 @@ async function connectRealChrome(opts?: {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const context = browser.contexts()[0] || (await browser.newContext());
 
-  // WEBRTC IP LEAK (JS qatlami) CDP yo'lida ham: launch yo'li applyStealthInit
-  // bilan qo'shadi, CDP esa uni chaqirmaydi — shuning uchun shu yerda qo'shamiz.
-  // Chrome bayrog'i (webrtcLeakArgs) asosiy himoya; bu ikkinchi qatlam.
-  await applyWebrtcGuard(context);
+  // Stealth init-skriptlar (WebRTC guard + apparat spoof) CDP yo'lida
+  // openBrowserContext -> applyCdpStealth orqali HAR PAGE darajada qo'shiladi
+  // (context.addInitScript connectOverCDP'da yangi page'larga ishonchsiz).
 
   return {
     context,
@@ -1067,12 +1117,12 @@ export async function openBrowserContext(
       cdpFreshProfile: cdpOpts?.cdpFreshProfile,
     });
     if (real) {
-      // CDP yo'lida ham apparat fingerprint (WebGL/CPU/RAM) spoof — server izini
-      // yashirish uchun (Docker/Xvfb'da WebGL "SwiftShader" beradi). WebRTC guard
-      // connectRealChrome ichida qo'shilgan. navigator.languages'ni CDP'da
-      // O'ZGARTIRMAYMIZ — real Chrome HTTP Accept-Language header bilan
-      // nomuvofiqlik bo'lmasin; WebGL/CPU/RAM spoof esa header'siz, xavfsiz.
-      await applyHardwareSpoof(real.context, proxyTarget?.profileKey ?? null);
+      // CDP yo'lida stealth init-skriptlar (WebRTC guard + WebGL/CPU/RAM spoof)
+      // HAR PAGE darajada qo'shiladi (applyCdpStealth): context.addInitScript
+      // connectOverCDP'da yangi page'larga ISHONCHSIZ (runtime testda tasdiqlandi).
+      // navigator.languages'ni CDP'da O'ZGARTIRMAYMIZ — real Chrome HTTP
+      // Accept-Language header bilan nomuvofiqlik bo'lmasin.
+      await applyCdpStealth(real.context, proxyTarget?.profileKey ?? null);
       return real;
     }
     // CDP muvaffaqiyatsiz bo'lsa — oddiy rejimga tushamiz (pastda).
