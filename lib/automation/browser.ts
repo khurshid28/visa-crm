@@ -44,6 +44,29 @@ export function launchArgs(): string[] {
     "--no-first-run",
     "--disable-dev-shm-usage",
     "--disable-popup-blocking",
+    // WEBRTC IP LEAK himoyasi: WebRTC UDP/STUN HTTP-proxy'ni chetlab o'tib
+    // haqiqiy (server) IP'ni ochib qo'yishi mumkin. Bu bayroq proxy'dan
+    // tashqari UDP'ni butunlay taqiqlaydi — shunda real IP hech qachon
+    // sizib chiqmaydi (faqat proxy exit IP ko'rinadi).
+    ...webrtcLeakArgs(),
+  ];
+}
+
+// WebRTC orqali real IP sizishini oldini oluvchi Chrome bayroqlari.
+// CDP (connectRealChrome) va launch yo'llari — ikkalasida ham ishlatiladi.
+// .env: BOOKING_WEBRTC_PROTECT=false bo'lsa o'chadi (default: yoqilgan).
+export function webrtcLeakArgs(): string[] {
+  if (
+    (process.env.BOOKING_WEBRTC_PROTECT || "").trim().toLowerCase() === "false"
+  ) {
+    return [];
+  }
+  return [
+    // Proxy'dan tashqari UDP'ni taqiqlaydi — WebRTC faqat proxy orqali ketadi
+    // (yoki umuman ishlamaydi). Real local/server IP STUN orqali chiqmaydi.
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    // mDNS host nomzodlarini ham o'chiradi (qo'shimcha local IP manbasi).
+    "--disable-features=WebRtcHideLocalIpsWithMdns",
   ];
 }
 
@@ -265,11 +288,101 @@ async function applyStealthInit(
       }
     }, langs)
     .catch(() => {});
+  // WebRTC IP leak himoyasi (JS qatlami) — alohida init-script.
+  await applyWebrtcGuard(context);
 }
 
-// Real brauzerga o'xshatish uchun fingerprint sozlamalari (.env dan override).
+// WEBRTC IP LEAK (JS qatlami) — Chrome bayrog'i (webrtcLeakArgs) ustiga ikkinchi
+// himoya qatlami. ICE candidate'lardagi IP'li (host/srflx) nomzodlarni yutadi,
+// shunda RTCPeerConnection real local/server IP'ni sahifaga bermaydi. Launch
+// (applyStealthInit) va CDP (connectRealChrome) — ikkala yo'lda ishlatiladi.
+// .env: BOOKING_WEBRTC_PROTECT=false bo'lsa o'chadi.
+async function applyWebrtcGuard(
+  context: import("playwright").BrowserContext,
+): Promise<void> {
+  if (
+    (process.env.BOOKING_WEBRTC_PROTECT || "").trim().toLowerCase() === "false"
+  ) {
+    return;
+  }
+  await context
+    .addInitScript(() => {
+      try {
+        const RTC: any =
+          (window as any).RTCPeerConnection ||
+          (window as any).webkitRTCPeerConnection ||
+          (window as any).mozRTCPeerConnection;
+        if (!RTC) return;
+        const Patched: any = function (this: any, ...rtcArgs: any[]) {
+          const pc = new RTC(...rtcArgs);
+          const origAdd = pc.addEventListener?.bind(pc);
+          if (origAdd) {
+            pc.addEventListener = (type: string, cb: any, ...rest: any[]) => {
+              if (type === "icecandidate" && typeof cb === "function") {
+                return origAdd(
+                  type,
+                  (ev: any) => {
+                    if (
+                      ev &&
+                      ev.candidate &&
+                      /(\d{1,3}\.){3}\d{1,3}|[a-f0-9]{0,4}:[a-f0-9:]+/i.test(
+                        ev.candidate.candidate || "",
+                      )
+                    ) {
+                      return; // IP'li candidate'ni yutamiz (sizdirmaymiz)
+                    }
+                    return cb(ev);
+                  },
+                  ...rest,
+                );
+              }
+              return origAdd(type, cb, ...rest);
+            };
+          }
+          return pc;
+        };
+        Patched.prototype = RTC.prototype;
+        (window as any).RTCPeerConnection = Patched;
+        (window as any).webkitRTCPeerConnection = Patched;
+      } catch {
+        /* ignore */
+      }
+    })
+    .catch(() => {});
+}
+
+// Real brauzerga o'xshatish uchun fingerprint sozlamalari (.env'dan override).
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+// Per-akkaunt fingerprint xilma-xilligi: bir nechta REAL Windows Chrome
+// versiyasi + keng tarqalgan viewport. Har profileKey shulardan BIRINI barqaror
+// (har safar bir xil) tanlaydi — shunda bitta serverdan ochilgan akkauntlar
+// bir xil UA/oyna o'lchamiga ega bo'lib "bitta manba" deb bog'lanmaydi, lekin
+// bitta akkaunt har doim o'zining bir xil belgisini saqlaydi (barqaror).
+const UA_POOL: string[] = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+];
+const VIEWPORT_POOL: Array<{ width: number; height: number }> = [
+  { width: 1366, height: 768 },
+  { width: 1920, height: 1080 },
+  { width: 1536, height: 864 },
+  { width: 1440, height: 900 },
+  { width: 1280, height: 720 },
+];
+
+// profileKey'dan barqaror (deterministik) son — variant tanlash uchun.
+function fpHash(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
 
 // Proxy davlatiga mos timezone + til (Accept-Language). Exit IP qaysi davlatda
 // bo'lsa, timezone va til SHU davlatga moslashadi — aks holda anti-bot (Cloudflare)
@@ -295,16 +408,27 @@ const COUNTRY_FP: Record<
   },
 };
 
-function fingerprintOptions(country?: string | null) {
-  const userAgent = (
-    process.env.BOOKING_USER_AGENT || DEFAULT_USER_AGENT
-  ).trim();
-
+function fingerprintOptions(
+  country?: string | null,
+  profileKey?: string | null,
+) {
   // Exit IP davlatiga mos fingerprint (uz/kz/...). Topilmasa — .env yoki default.
   const cc = (country || "").trim().toLowerCase();
   const geo = COUNTRY_FP[cc];
 
   const locale = (process.env.BOOKING_LOCALE || geo?.locale || "en-US").trim();
+
+  // Per-akkaunt barqaror tanlov: profileKey bo'lsa pool'dan deterministik
+  // UA + viewport olamiz (har akkauntga boshqacha, lekin o'ziga har safar bir
+  // xil). .env BOOKING_USER_AGENT/BOOKING_VIEWPORT berilsa — u har doim ustun.
+  const key = (profileKey || "").trim().toLowerCase();
+  const h = key ? fpHash(key) : 0;
+  const pooledUA = key ? UA_POOL[h % UA_POOL.length] : DEFAULT_USER_AGENT;
+  const pooledVp = key
+    ? VIEWPORT_POOL[(h >>> 8) % VIEWPORT_POOL.length]
+    : { width: 1366, height: 768 };
+
+  const userAgent = (process.env.BOOKING_USER_AGENT || pooledUA).trim();
   const timezoneId = (
     process.env.BOOKING_TIMEZONE ||
     geo?.timezone ||
@@ -316,11 +440,9 @@ function fingerprintOptions(country?: string | null) {
     `${locale},en;q=0.9`
   ).trim();
 
-  const vp = (process.env.BOOKING_VIEWPORT || "1366x768").trim();
-  const m = vp.match(/^(\d{3,5})\s*[x×]\s*(\d{3,5})$/i);
-  const viewport = m
-    ? { width: Number(m[1]), height: Number(m[2]) }
-    : { width: 1366, height: 768 };
+  const vpEnv = (process.env.BOOKING_VIEWPORT || "").trim();
+  const m = vpEnv.match(/^(\d{3,5})\s*[x×]\s*(\d{3,5})$/i);
+  const viewport = m ? { width: Number(m[1]), height: Number(m[2]) } : pooledVp;
   return {
     userAgent,
     locale,
@@ -670,7 +792,21 @@ async function connectRealChrome(opts?: {
       const proxyChain = await import("proxy-chain");
       localProxyUrl = await proxyChain.anonymizeProxy(fullProxyUrl(opts.proxy));
     } catch {
-      localProxyUrl = null; // proxy o'ralmadi — proxy'siz davom etamiz.
+      localProxyUrl = null; // o'rash muvaffaqiyatsiz
+    }
+    // FAIL-CLOSED: proxy TALAB qilingan (opts.proxy bor), lekin o'ralmadi.
+    // Eski xulq proxy'siz davom etardi — bu xavfli (real server IP ochiq
+    // chiqib ketadi). Default: CDP'ni BEKOR qilamiz (null qaytaramiz) —
+    // yuqori oqim launch yo'liga tushadi va proxy'ni Playwright'ning o'ziga
+    // (login/parol bilan) beradi, ya'ni IP baribir yashiringan qoladi.
+    // .env BOOKING_PROXY_FAIL_OPEN=true bo'lsa — eski (xavfli) xulq: direct.
+    if (!localProxyUrl) {
+      const failOpen =
+        (process.env.BOOKING_PROXY_FAIL_OPEN || "").trim().toLowerCase() ===
+        "true";
+      if (!failOpen) {
+        return null; // proxy o'ralmadi — direct'ga tushmaymiz (IP leak oldini olish)
+      }
     }
   }
 
@@ -715,6 +851,9 @@ async function connectRealChrome(opts?: {
     "--disable-renderer-backgrounding",
     "--disable-backgrounding-occluded-windows",
     "--disable-ipc-flooding-protection",
+    // WEBRTC IP LEAK himoyasi (CDP yo'li): real server IP STUN/UDP orqali
+    // sizib chiqmasligi uchun — launch yo'lidagi bilan bir xil.
+    ...webrtcLeakArgs(),
     ...dockerArgs,
     ...(localProxyUrl ? [`--proxy-server=${localProxyUrl}`] : []),
     "about:blank",
@@ -753,6 +892,11 @@ async function connectRealChrome(opts?: {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const context = browser.contexts()[0] || (await browser.newContext());
 
+  // WEBRTC IP LEAK (JS qatlami) CDP yo'lida ham: launch yo'li applyStealthInit
+  // bilan qo'shadi, CDP esa uni chaqirmaydi — shuning uchun shu yerda qo'shamiz.
+  // Chrome bayrog'i (webrtcLeakArgs) asosiy himoya; bu ikkinchi qatlam.
+  await applyWebrtcGuard(context);
+
   return {
     context,
     close: async () => {
@@ -783,9 +927,10 @@ export async function openBrowserContext(
 ) {
   const chromium = await getStealthChromium();
   const proxy = proxyTarget ? proxyFor(proxyTarget) : undefined;
-  // Fingerprint'ni proxy exit IP davlatiga moslaymiz (timezone + til).
+  // Fingerprint'ni proxy exit IP davlatiga moslaymiz (timezone + til) va
+  // profileKey bo'yicha barqaror UA/viewport tanlaymiz (akkauntlar bog'lanmasin).
   const proxyCountry = proxyTarget ? proxyMetaFor(proxyTarget)?.country : null;
-  const fp = fingerprintOptions(proxyCountry);
+  const fp = fingerprintOptions(proxyCountry, proxyTarget?.profileKey ?? null);
 
   // CDP rejimi: haqiqiy chrome.exe'ni o'zimiz ochib connectOverCDP bilan ulanamiz
   // (Turnstile uchun eng tabiiy — Playwright launch belgilarisiz). .env:
