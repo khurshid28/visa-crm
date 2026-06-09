@@ -41,13 +41,15 @@ import {
   profileDirFor,
   applyResourceBlocking,
 } from "./browser";
-import { readExitIp, acceptCookies, fillFieldReliably } from "./page-utils";
+import { readExitIp, acceptCookies } from "./page-utils";
+import { waitForCloudflareClear, solveTurnstile } from "./turnstile";
 import {
-  clickTurnstile,
-  waitForTurnstile,
-  waitForCloudflareClear,
-  solveTurnstile,
-} from "./turnstile";
+  startLoginCaptcha,
+  fillCredentials,
+  solveLoginCaptcha,
+  clickSignIn,
+  waitForLoginForm,
+} from "./login-form";
 import { humanPause } from "./human";
 import { proxyMetaFor, shouldLogExitIp, isProxyEnabled } from "../proxy";
 import {
@@ -574,45 +576,17 @@ async function loginInSession(
     }
     lap("goto login + cf + cookie");
 
-    const emailSel = '#email, input[formcontrolname="username"]';
-    await page
-      .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
-      .catch(() => {});
+    await waitForLoginForm(page);
     lap("email maydoni ko'rindi");
 
-    // Turnstile token email/parol bilan PARALLEL yechiladi. Auto-pass'ni UZOQ
-    // kutmaymiz: forma to'ldirilguncha (~2-3s) auto o'zi kelmasa, interaktiv
-    // checkbox bor demak — DARROV OS-klik bilan o'zimiz bosamiz (kutib turmaymiz).
-    const captchaPromise = waitForTurnstile(
-      page,
-      Number(process.env.BOOKING_CAPTCHA_AUTOPASS_MS || "3000"),
-    );
-
-    const emailEl = page.locator(emailSel).first();
-    if ((await emailEl.count()) > 0) {
-      await fillFieldReliably(page, emailEl, email);
-    }
-    await humanPause();
-
-    const passSel = '#password, input[formcontrolname="password"]';
-    const passEl = page.locator(passSel).first();
-    if ((await passEl.count()) > 0) {
-      await fillFieldReliably(page, passEl, password);
-    }
-    await humanPause();
+    // Turnstile token email/parol bilan PARALLEL yechiladi (umumiy login-form
+    // moduli: booking login bilan bir xil mantiq — selektorlar/captcha takrorlanmaydi).
+    const captchaPromise = startLoginCaptcha(page);
+    await fillCredentials(page, email, password);
     lap("email/parol to'ldirildi");
 
-    let captcha = await captchaPromise;
-    lap(`captcha auto: present=${captcha.present} solved=${captcha.solved}`);
-    if (captcha.present && !captcha.solved) {
-      // clickTurnstile token kelsa TRUE qaytaradi — ortiqcha 30s kutmaymiz.
-      // Kelmasa qisqa (6s) qayta tekshiramiz, keyin sahifa qayta yuklanadi.
-      const solved = await clickTurnstile(page).catch(() => false);
-      captcha = solved
-        ? { present: true, solved: true }
-        : await waitForTurnstile(page, 6000);
-      lap(`captcha klikdan keyin: solved=${captcha.solved}`);
-    }
+    const captcha = await solveLoginCaptcha(page, captchaPromise);
+    lap(`captcha: present=${captcha.present} solved=${captcha.solved}`);
 
     // Captcha hali ham o'tmagan bo'lsa — sahifani qayta yuklab yangi widget
     // bilan urinamiz (oxirgi urinish bo'lmasa). Yangi brauzer ochmaymiz.
@@ -621,18 +595,7 @@ async function loginInSession(
     }
 
     await humanPause(150, 400);
-    if (await acceptCookies(page)) {
-      /* banner Sign In'ni to'smasin */
-    }
-
-    const signInBtn = page
-      .locator(
-        'button:has-text("Sign In"), button:has-text("Sign in"), button[type="submit"]',
-      )
-      .first();
-    if ((await signInBtn.count()) > 0) {
-      await signInBtn.click({ timeout: 8000 }).catch(() => {});
-    }
+    await clickSignIn(page);
     lap("Sign In bosildi");
 
     // Sign In bosgandan keyin IKKI holatdan birini kutamiz (qaysi avval bo'lsa):

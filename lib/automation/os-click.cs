@@ -22,6 +22,7 @@ using System.Threading;
 public class VfsOsClick
 {
     [DllImport("user32.dll")] static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, IntPtr dwExtraInfo);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hWnd);
@@ -36,6 +37,9 @@ public class VfsOsClick
     const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004;
     static readonly Random rng = new Random();
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT { public int X; public int Y; }
+
     static void Main(string[] args)
     {
         if (args.Length < 2) return;
@@ -48,9 +52,23 @@ public class VfsOsClick
         // SetCursorPos mantiqiy piksel kutadi — koordinata noto'g'ri tushadi).
         try { SetProcessDpiAwareness(2); } catch { }
 
+        // FOYDALANUVCHI SICHQONCHASINI BAND QILMAYMIZ: klikdan OLDIN kursorning
+        // joriy joyini eslab qolamiz, klikdan KEYIN o'sha joyga QAYTARAMIZ.
+        // Shunda kursor checkbox'ga bir zum (~0.5s) "miltillab" borib bosadi-da,
+        // darrov foydalanuvchi qoldirgan joyga qaytadi (mishka "olib ketilmaydi").
+        // Klik allaqachon ro'yxatdan o'tgan (mouse_event LEFTUP) — qaytarish uni
+        // bekor qilmaydi, Cloudflare uchun bu inson xatti-harakatiga o'xshaydi.
+        POINT orig; bool haveOrig = false;
+        try { haveOrig = GetCursorPos(out orig); } catch { orig = new POINT(); }
+
         Focus(FindChrome(pid));
         Thread.Sleep(60);
         Click(x, y);
+
+        if (haveOrig)
+        {
+            try { Thread.Sleep(40); SetCursorPos(orig.X, orig.Y); } catch { }
+        }
     }
 
     // Chrome oynasini TEZ topadi (uzun siklsiz). pid'da MainWindowHandle bo'lmasa

@@ -8,6 +8,7 @@
 //   - browser.ts    — brauzer/context/proxy/CDP/profil
 //   - page-utils.ts — sahifa yordamchilari (forma, cookie, token, IP)
 //   - turnstile.ts  — Cloudflare Turnstile / challenge yechuvchi
+//   - login-form.ts — login formasining umumiy bosqichlari (login+slot check uchun)
 //   - login.ts      — loginToBooking
 //   - register.ts   — registerToBooking (yangi akkaunt yaratish)
 //   - booking.ts    — runBooking (register/order)
@@ -54,3 +55,15 @@ export {
   osClickTurnstile,
   hasTurnstileToken,
 } from "./turnstile";
+
+// Login formasining umumiy bosqichlari — login.ts (booking) ham, calendar.ts
+// (slot check) ham SHU yagona yadroni ishlatadi (selektorlar/captcha takrorlanmaydi).
+export {
+  LOGIN_SELECTORS,
+  waitForLoginForm,
+  startLoginCaptcha,
+  fillCredentials,
+  solveLoginCaptcha,
+  clickSignIn,
+} from "./login-form";
+export type { CaptchaState, StepFn } from "./login-form";

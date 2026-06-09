@@ -18,15 +18,18 @@ import {
   readExitIp,
   readAuthToken,
   extractTokenFromBody,
-  fillFieldReliably,
   dumpDebug,
   dumpStorage,
 } from "./page-utils";
+import { waitForCloudflareClear } from "./turnstile";
 import {
-  clickTurnstile,
-  waitForCloudflareClear,
-  waitForTurnstile,
-} from "./turnstile";
+  LOGIN_SELECTORS,
+  startLoginCaptcha,
+  fillCredentials,
+  solveLoginCaptcha,
+  clickSignIn,
+  waitForLoginForm,
+} from "./login-form";
 
 /**
  * Booking saytiga LOGIN qiladi (BOOKING_LOGIN_URL). Proxy (sticky, email bo'yicha)
@@ -309,7 +312,7 @@ export async function loginToBooking(
     // email/parol/captcha YO'Q. Shuning uchun email maydoni YOKI blok sahifasi
     // — qaysi avval chiqsa, shuni kutamiz (oddiy loginda email ~1-2s da chiqadi,
     // qo'shimcha kechikish YO'Q; blokda esa 60s+ behuda qidirmasdan DARROV chiqamiz).
-    const emailSel = '#email, input[formcontrolname="username"]';
+    const emailSel = LOGIN_SELECTORS.email;
     const appeared = await Promise.race([
       page
         .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
@@ -354,66 +357,31 @@ export async function loginToBooking(
     }
 
     // TEZLIK: Cloudflare Turnstile token sahifa yuklanishi bilan FONda yechila
-    // boshlaydi. Shuning uchun captcha kutishni SHU YERDA (email/parol to'ldirish
-    // bilan PARALLEL) ishga tushiramiz — token email/parol yozilayotganda tayyor
-    // bo'ladi va keyin qo'shimcha kutish ~0 bo'ladi.
-    // QISQA auto-pass oynasi: token shu vaqtda kelmasa interaktiv checkbox bor
-    // demak — to'liq 30s kutmasdan darrov bosamiz (vaqt tejash). Klikdan keyin
-    // to'liq BOOKING_CAPTCHA_TIMEOUT_MS kutiladi.
-    const captchaPromise = waitForTurnstile(
-      page,
-      Number(process.env.BOOKING_CAPTCHA_AUTOPASS_MS || "6000"),
-    );
+    // boshlaydi. Shuning uchun captcha kutishni email/parol to'ldirish bilan
+    // PARALLEL ishga tushiramiz (login-form moduli) — token email/parol
+    // yozilayotganda tayyor bo'ladi va keyin qo'shimcha kutish ~0 bo'ladi.
+    const captchaPromise = startLoginCaptcha(page);
 
-    const emailEl = page.locator(emailSel).first();
-    if ((await emailEl.count()) > 0) {
-      const ok = await fillFieldReliably(page, emailEl, email);
-      base.filledEmail = ok;
-      step(ok ? "Email kiritildi" : "Email to'liq kiritilmadi (chala)");
-    } else {
-      step("Email maydoni topilmadi!");
+    // Email + parolni to'ldiramiz (umumiy login-form yordamchisi).
+    const filled = await fillCredentials(page, email, password, step);
+    base.filledEmail = filled.filledEmail;
+    base.filledPassword = filled.filledPassword;
+    if (!filled.emailFound) {
       // Debug: sahifa holatini saqlaymiz (nima ko'rinayotganini bilish uchun).
       await dumpDebug(page, "login-noemail").catch(() => {});
     }
-    await humanPause();
 
-    // PASSWORD — ko'rinadigan input #password (yashirin #password1 emas).
-    const passSel = '#password, input[formcontrolname="password"]';
-    const passEl = page.locator(passSel).first();
-    if ((await passEl.count()) > 0) {
-      const ok = await fillFieldReliably(page, passEl, password);
-      base.filledPassword = ok;
-      step(ok ? "Parol kiritildi" : "Parol to'liq kiritilmadi (chala)");
-    } else {
-      step("Parol maydoni topilmadi!");
-    }
-    await humanPause();
-
-    // Cloudflare Turnstile — email/parol bilan PARALLEL boshlangan kutishни
-    // shu yerda yig'amiz (ko'pincha token allaqachon tayyor — qo'shimcha kutish ~0).
+    // Cloudflare Turnstile — PARALLEL boshlangan kutishni shu yerda yig'amiz,
+    // token kelmagan bo'lsa checkbox ustiga bosamiz (umumiy login-form yordamchisi).
     step("Cloudflare Turnstile tekshirilmoqda...");
-    let captcha = await captchaPromise;
+    let captcha = await solveLoginCaptcha(page, captchaPromise, step);
     base.captchaPresent = captcha.present;
     base.captchaSolved = captcha.solved;
 
-    // Token avtomatik to'lmagan bo'lsa — checkbox ustiga inson kabi bosamiz
-    // (tasodifiy nuqtalarda) va yana token to'lishini kutamiz.
-    if (captcha.present && !captcha.solved) {
-      step("Captcha o'zi o'tmadi — ustiga bosilmoqda...");
-      // step uzatamiz — OS-klik ichidagi bosqichlar (qaysi klik, qachon token,
-      // CF tekshiruvi) ko'rinadi. clickTurnstile endi to'liq token byudjetini
-      // o'zi kutadi, shuning uchun pastdagi tasdiqlash QISQA (ikki marta 30s emas).
-      const clicked = await clickTurnstile(page, step);
-      if (clicked) {
-        step("Captcha ustiga bosildi, token kutilmoqda...");
-      }
-      captcha = await waitForTurnstile(
-        page,
-        Number(process.env.BOOKING_CAPTCHA_CONFIRM_MS || "4000"),
-      );
-      base.captchaPresent = captcha.present;
-      base.captchaSolved = captcha.solved;
-    }
+    // Captcha BIR MARTA ko'ringanmi? Klikdan keyin widget qayta render bo'lib
+    // `present` bir lahza `false` o'qilishi mumkin — shunga tayanib BEKORGA
+    // taslim bo'lmaslik uchun sticky bayroq (solveLoginCaptcha qaytaradi).
+    let captchaWasPresent = captcha.wasPresent;
 
     // CAPTCHA RAD ETILDI / iframe chiqmadi (troubleshoot) — SAHIFANI QAYTA
     // YUKLAB toza Turnstile widget bilan qayta urinamiz (yangi brauzer EMAS).
@@ -425,7 +393,7 @@ export async function loginToBooking(
     );
     for (
       let rl = 0;
-      rl < captchaReloads && captcha.present && !captcha.solved;
+      rl < captchaReloads && captchaWasPresent && !captcha.solved;
       rl++
     ) {
       step(
@@ -437,66 +405,37 @@ export async function loginToBooking(
       await waitForCloudflareClear(page, step).catch(() => {});
       if (await acceptCookies(page)) step("Cookie qabul qilindi");
 
-      // Yangi sahifada email/parolni qayta to'ldiramiz (reload tozalaydi).
-      const reCaptcha = waitForTurnstile(
-        page,
-        Number(process.env.BOOKING_CAPTCHA_AUTOPASS_MS || "6000"),
-      );
-      await page
-        .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
-        .catch(() => {});
-      const reEmail = page.locator(emailSel).first();
-      if ((await reEmail.count()) > 0) {
-        base.filledEmail = await fillFieldReliably(page, reEmail, email);
-      }
-      await humanPause();
-      const rePass = page.locator(passSel).first();
-      if ((await rePass.count()) > 0) {
-        base.filledPassword = await fillFieldReliably(page, rePass, password);
-      }
-      await humanPause();
+      // Yangi sahifada email/parolni qayta to'ldiramiz (reload tozalaydi) —
+      // captcha kutishni PARALLEL boshlab, umumiy login-form yordamchilari bilan.
+      const reCaptcha = startLoginCaptcha(page);
+      await waitForLoginForm(page);
+      const reFilled = await fillCredentials(page, email, password);
+      base.filledEmail = reFilled.filledEmail;
+      base.filledPassword = reFilled.filledPassword;
       step("Email/parol qayta kiritildi");
 
-      captcha = await reCaptcha;
-      if (captcha.present && !captcha.solved) {
-        const clicked = await clickTurnstile(page, step);
-        if (clicked) step("Captcha ustiga bosildi, token kutilmoqda...");
-        captcha = await waitForTurnstile(
-          page,
-          Number(process.env.BOOKING_CAPTCHA_CONFIRM_MS || "4000"),
-        );
-      }
+      captcha = await solveLoginCaptcha(page, reCaptcha, step);
+      if (captcha.wasPresent) captchaWasPresent = true;
       base.captchaPresent = captcha.present;
       base.captchaSolved = captcha.solved;
     }
 
-    if (captcha.present) {
-      step(captcha.solved ? "Captcha o'tdi ✓" : "Captcha o'tmadi ✗");
+    if (captcha.solved) {
+      step("Captcha o'tdi ✓");
+    } else if (captchaWasPresent) {
+      step("Captcha o'tmadi ✗");
     } else {
       step("Captcha yo'q (bu sahifada)");
     }
-    if (captcha.present && !captcha.solved) {
+    if (captchaWasPresent && !captcha.solved) {
       pageErrors.push("turnstile: token kutib olinmadi");
     }
 
     await humanPause(150, 400);
 
-    // Cookie banneri Sign In tugmasini to'sib qo'yishi mumkin — yana yopamiz.
-    if (await acceptCookies(page)) step("Cookie qabul qilindi");
-
-    // "Sign In" tugmasini bosamiz.
-    const signInBtn = page
-      .locator(
-        'button:has-text("Sign In"), button:has-text("Sign in"), button[type="submit"]',
-      )
-      .first();
-    if ((await signInBtn.count()) > 0) {
-      await signInBtn.click({ timeout: 8000 }).catch(() => {});
-      base.submitted = true;
-      step("Sign In bosildi");
-    } else {
-      step("Sign In tugmasi topilmadi!");
-    }
+    // "Sign In" tugmasini bosamiz (umumiy login-form yordamchisi cookie
+    // bannerini ham yopadi — tugmani to'smasin).
+    base.submitted = await clickSignIn(page, step);
 
     // Login natijasini kutamiz: dashboard'ga o'tishni (URL o'zgarishi) kutamiz.
     step("Natija kutilmoqda...");

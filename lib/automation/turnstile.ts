@@ -62,6 +62,46 @@ export async function hasTurnstileToken(page: Page): Promise<boolean> {
     .catch(() => false);
 }
 
+/**
+ * Turnstile iframe ICHIDA "Error / Troubleshoot" holati chiqdimi?
+ * Cloudflare Turnstile challenge ishlamay qolsa widget ichida (challenges.
+ * cloudflare.com iframe'ida) "Error", "Troubleshoot", "something went wrong"
+ * yoki xato kodi (masalan 300xxx) ko'rsatadi. Bu holatda klik foydasiz —
+ * sahifani QAYTA YUKLASH kerak (toza widget). page.frames() cross-origin
+ * iframe'ni ham ko'radi (shadow DOM ahamiyatsiz — barcha frame ro'yxatda).
+ */
+export async function turnstileFrameError(page: Page): Promise<boolean> {
+  try {
+    const frames = page.frames();
+    for (const fr of frames) {
+      const u = (fr.url() || "").toLowerCase();
+      if (u.indexOf("challenges.cloudflare.com") < 0) continue;
+      const bad = await fr
+        .evaluate(() => {
+          const t = (document.body?.innerText || "").toLowerCase();
+          if (!t) return false;
+          // Turnstile XATO holatlari (reload kerak). "Success!"/"verifying"/
+          // "verify you are human" — bular NORMAL, ularga tegmaymiz. Quyidagilar
+          // = haqiqiy xato/rad: troubleshoot, verification failed, please try
+          // again, something went wrong, "error: 300xxx" kodi.
+          return (
+            t.indexOf("troubleshoot") >= 0 ||
+            t.indexOf("something went wrong") >= 0 ||
+            t.indexOf("an error occurred") >= 0 ||
+            t.indexOf("verification failed") >= 0 ||
+            t.indexOf("please try again") >= 0 ||
+            /error[\s:]*\d{3,}/.test(t)
+          );
+        })
+        .catch(() => false);
+      if (bad) return true;
+    }
+  } catch {
+    /* ignore — xato bo'lsa "xato yo'q" deb hisoblaymiz */
+  }
+  return false;
+}
+
 // ====================================================================
 //  YUQORI DARAJALI — solveTurnstile
 // ====================================================================
@@ -368,6 +408,13 @@ export async function osClickTurnstile(
     return false; // Windows'da skript topilmadi
   }
 
+  // OLDINDAN KOMPILYATSIYA: .exe hali yo'q bo'lsa (birinchi ishga tushish / TEMP
+  // tozalangan), uni HOZIROQ (fire-and-forget) qura boshlaymiz — quyidagi iframe
+  // kutish (~8s) davomida tayyor bo'ladi, shunda 1-klik kompilyatsiyani KUTMAYDI.
+  // Cache bor bo'lsa darrov hal bo'ladi (no-op). Slot-worker'ning birinchi
+  // login'ida ham klik bloklanmaydi.
+  if (isWin) void ensureOsClickExe();
+
   const pid = getLastChromePid();
 
   // ── Cloudflare "Verifying..." kuzatuvchisi ─────────────────────────────────
@@ -406,13 +453,26 @@ export async function osClickTurnstile(
     const maxClicks = 3;
     let lastClickAt = 0;
     let skipLogged = false;
-    let waitLogged = false;
+    let lastWaitLogAt = 0;
 
     while (Date.now() < deadline) {
       // Auto-pass / klikdan keyingi token — eng birinchi tekshiramiz.
       if (await hasTurnstileToken(page)) {
         step?.(`token keldi (${clicks} klik, +${el(tStart)}s)`);
         return true;
+      }
+
+      // iframe ICHIDA "Error / Troubleshoot" chiqdimi? — HAR aylanishda (~400ms)
+      // tekshiramiz, ya'ni iframe kutilayotgan BUTUN vaqt davomida ham kuzatamiz
+      // (qancha kutsa, shuncha vaqt qaraymiz). CF frame hali yo'q bo'lsa
+      // turnstileFrameError deyarli BEPUL (evaluate yo'q). Xato chiqsa klik
+      // foydasiz — DARROV chiqamiz, login.ts sahifani qayta yuklab toza widget
+      // keltiradi (klik isrof qilmasdan, 30s kutmasdan).
+      if (await turnstileFrameError(page)) {
+        step?.(
+          `iframe Error/Troubleshoot — qayta yuklash kerak (+${el(tStart)}s)`,
+        );
+        return false;
       }
 
       // 1) Hali o'lchanmagan — iframe render bo'lishini KUTAMIZ.
@@ -424,9 +484,10 @@ export async function osClickTurnstile(
             step?.(`iframe chiqmadi +${el(tStart)}s — CDP zaxiraga`);
             return false;
           }
-          if (!waitLogged) {
-            step?.("iframe kutilmoqda (kech render)...");
-            waitLogged = true;
+          // Poll 400ms (tez), lekin LOG har ~2s — qotib qolmadi, faol kuzatyapti.
+          if (Date.now() - lastWaitLogAt > 2000) {
+            step?.(`iframe kutilmoqda (kech render) +${el(tStart)}s...`);
+            lastWaitLogAt = Date.now();
           }
           await page.waitForTimeout(400).catch(() => {});
           continue;
@@ -437,10 +498,12 @@ export async function osClickTurnstile(
       // 2) O'lchandi — CF-ni hurmat qilib bosamiz.
       const cfBusy = Date.now() - lastCfActivity < 2500;
       const sinceClick = Date.now() - lastClickAt;
-      // 1-klik DARROV. Keyingilarni FAQAT: oldingi klikdan >5s o'tgan + CF JIM
+      // 1-klik DARROV. Keyingilarni FAQAT: oldingi klikdan >4s o'tgan + CF JIM
       // (tekshirmayapti = klik tegmagan bo'lishi mumkin) + limit tugamagan bo'lsa.
+      // cfBusy guard CF-ni reset qilishdan saqlaydi; 4s (avval 5s) — CF jim
+      // bo'lgach qayta urinishga tezroq o'tamiz (bir zum tejaymiz).
       const shouldClick =
-        clicks === 0 || (clicks < maxClicks && sinceClick > 5000 && !cfBusy);
+        clicks === 0 || (clicks < maxClicks && sinceClick > 4000 && !cfBusy);
 
       if (shouldClick) {
         if (clicks > 0) {
@@ -961,7 +1024,10 @@ function osClickCsPath(): string | null {
 
 /** Kompilyatsiya qilingan .exe cache yo'li (TEMP). */
 function osClickExePath(): string {
-  return path.join(os.tmpdir(), "VfsOsClick_v1.exe");
+  // _v2: kursor save/restore qo'shildi (klikdan keyin sichqoncha o'z joyiga
+  // qaytadi). Versiya o'zgargani uchun eski _v1 cache ishlatilmaydi — yangi
+  // manba bilan qayta kompilyatsiya bo'ladi.
+  return path.join(os.tmpdir(), "VfsOsClick_v2.exe");
 }
 
 /**
