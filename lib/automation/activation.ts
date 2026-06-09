@@ -15,7 +15,13 @@ import { readExitIp } from "./page-utils";
 
 export async function runActivation(
   applicant: AutomationApplicant,
-  opts?: { profileKey?: string | null },
+  opts?: {
+    profileKey?: string | null;
+    // Xatni qancha kutish (ms) — standalone mail-worker qisqa (bir poll)
+    // qiymat beradi, inline (booking) esa env default (3 daqiqa) ishlatadi.
+    mailWaitMs?: number;
+    mailPollMs?: number;
+  },
 ): Promise<ActivationResult> {
   const toEmail = applicant.generatedEmail || applicant.email || null;
   // Aktivatsiya register bilan BIR XIL session (profil + sticky IP) ishlatadi.
@@ -58,7 +64,12 @@ export async function runActivation(
     };
   }
 
-  const mail = await waitForActivationMail(toEmail);
+  const mail = await waitForActivationMail(
+    toEmail,
+    opts?.mailWaitMs != null
+      ? { timeoutMs: opts.mailWaitMs, pollMs: opts.mailPollMs }
+      : {},
+  );
   if (!mail) {
     return {
       ok: false,

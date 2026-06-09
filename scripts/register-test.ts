@@ -27,6 +27,27 @@
 import "dotenv/config";
 import { registerToBooking } from "../lib/automation";
 
+// Windows konsolini UTF-8 ga o'tkazamiz — aks holda emoji (📝) va chiziqlar (─)
+// Cyrillic kod sahifasida "тФА / ЁЯУЭ" bo'lib buziladi. chcp 65001 + Node stream
+// kodlashini UTF-8 qilamiz (chiroyli chiqishi uchun).
+if (process.platform === "win32") {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require("child_process").execSync("chcp 65001", {
+      stdio: "ignore",
+      shell: "cmd.exe",
+    });
+  } catch {
+    /* chcp bo'lmasa ham davom etamiz */
+  }
+}
+try {
+  (process.stdout as NodeJS.WriteStream).setDefaultEncoding?.("utf8");
+  (process.stderr as NodeJS.WriteStream).setDefaultEncoding?.("utf8");
+} catch {
+  /* jim */
+}
+
 const DEFAULT_EMAIL = "khurshidi2827@gmail.com";
 const DEFAULT_PHONE = "901234567";
 
@@ -61,9 +82,8 @@ const startedAt = Date.now();
 function logStep(msg: string) {
   stepNo += 1;
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1).padStart(5);
-  const ok = /✓|o'tdi|kiritildi|ochildi|bosildi|tanlandi|tayyor|belgilandi/i.test(
-    msg,
-  );
+  const ok =
+    /✓|o'tdi|kiritildi|ochildi|bosildi|tanlandi|tayyor|belgilandi/i.test(msg);
   const bad = /✗|topilmadi|o'tmadi|xato|chala|nofaol/i.test(msg);
   const icon = bad ? red("✗") : ok ? green("✓") : cyan("•");
   const num = gray(`#${String(stepNo).padStart(2, "0")}`);
@@ -127,19 +147,11 @@ async function main() {
     "  " + bold("📋  NATIJA") + gray(`  (${(ms / 1000).toFixed(1)}s)`),
   );
   hr();
-  row(
-    "Holat",
-    res.ok ? "TAYYOR ✓" : "BO'LMADI ✗",
-    res.ok,
-  );
+  row("Holat", res.ok ? "TAYYOR ✓" : "BO'LMADI ✗", res.ok);
   row("Izoh", res.note);
   row("Email to'ldi", res.filledEmail ? "ha" : "yo'q", res.filledEmail);
   row("Parol to'ldi", res.filledPassword ? "ha" : "yo'q", res.filledPassword);
-  row(
-    "Confirm to'ldi",
-    res.filledConfirm ? "ha" : "yo'q",
-    res.filledConfirm,
-  );
+  row("Confirm to'ldi", res.filledConfirm ? "ha" : "yo'q", res.filledConfirm);
   row(
     "Dial code (+998)",
     res.dialCodeSelected ? "tanlandi" : "yo'q",

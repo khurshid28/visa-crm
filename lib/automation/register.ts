@@ -26,6 +26,8 @@ import {
   readExitIp,
   fillFieldReliably,
   dumpDebug,
+  dumpNetwork,
+  type NetCapture,
 } from "./page-utils";
 import {
   clickTurnstile,
@@ -121,6 +123,35 @@ async function loadWithHealing(
 }
 
 /**
+ * VFS rate-limit / blok holatini aniqlaydi (register oqimida HAR QADAMda
+ * tekshirib turamiz — config API 429 bo'lsa SPA `page-not-found`ga redirect
+ * qiladi va forma YO'QOLADI; keyin maydonlarni 60s behuda kutib o'tirmaymiz).
+ *  - 429201 "Permission Issue" (register, ~2 soat cooldown)
+ *  - 429001 "unusual activity" (login/akkaunt bloki)
+ * Topilsa qisqa kod-satr qaytaradi (masalan "429201"), aks holda null.
+ */
+async function detectRegisterBlock(p: Page): Promise<string | null> {
+  try {
+    const url = p.url().toLowerCase();
+    const txt = (
+      await p
+        .locator("body")
+        .innerText()
+        .catch(() => "")
+    ).toLowerCase();
+    if (txt.includes("429201") || txt.includes("permission issue"))
+      return "429201";
+    if (txt.includes("429001") || txt.includes("unusual activity"))
+      return "429001";
+    if (/multiple requests within a short period/.test(txt)) return "429";
+    if (url.includes("page-not-found")) return "page-not-found";
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * "Dial Code" dropdownidan +998 (yoki berilgan kod) ni tanlaydi.
  * VFS Angular Material mat-select (yoki native select / qidiruvli overlay)
  * bo'lishi mumkin — bir necha usulni ketma-ket sinaydi. Hech qachon throw qilmaydi.
@@ -176,6 +207,16 @@ async function selectDialCode(
   //    eng yaqin tetikni topib OCHAMIZ.
   try {
     const opened = await page.evaluate(() => {
+      // VFS register dial code = <mat-select formcontrolname="dialcode">.
+      // ANIQ shu tetikni birinchi sinaymiz, keyin yorliq/birinchi tetik.
+      const exact = document.querySelector(
+        'mat-select[formcontrolname="dialcode"]',
+      ) as HTMLElement | null;
+      if (exact) {
+        exact.scrollIntoView({ block: "center" });
+        exact.click();
+        return true;
+      }
       const triggers = Array.from(
         document.querySelectorAll(
           "mat-select, .mat-mdc-select, .mat-select, [role='combobox'], .iti, .iti__selected-flag, ngx-intl-tel-input .dropdown-toggle",
@@ -229,7 +270,8 @@ async function selectDialCode(
       /* qidiruv yo'q — to'g'ridan-to'g'ri ro'yxatdan tanlaymiz */
     }
 
-    // Kod (yoki "uzbek") ni o'z ichiga olgan variantni bosamiz.
+    // Kod (yoki "uzbek") ni o'z ichiga olgan variantni bosamiz. +998 ANIQ
+    // mosligini birinchi qidiramiz (boshqa davlat matnida "998" bo'lib qolmasin).
     const picked = await page.evaluate((wanted) => {
       const opts = Array.from(
         document.querySelectorAll(
@@ -237,10 +279,15 @@ async function selectDialCode(
         ),
       ) as HTMLElement[];
       if (opts.length === 0) return false;
+      const norm = (s: string) => (s || "").replace(/\s+/g, " ").trim();
       const chosen =
-        opts.find((o) => (o.textContent || "").includes("+" + wanted)) ||
-        opts.find((o) => (o.textContent || "").includes(wanted)) ||
-        opts.find((o) => (o.textContent || "").toLowerCase().includes("uzbek"));
+        opts.find((o) => norm(o.textContent || "").includes("+" + wanted)) ||
+        opts.find((o) =>
+          norm(o.textContent || "")
+            .toLowerCase()
+            .includes("uzbek"),
+        ) ||
+        opts.find((o) => norm(o.textContent || "").includes(wanted));
       if (!chosen) return false;
       chosen.scrollIntoView({ block: "center" });
       chosen.click();
@@ -249,7 +296,20 @@ async function selectDialCode(
 
     await humanPause(150, 350);
     if (picked) {
-      step(`Dial code tanlandi (+${want}) ✓`);
+      // TASDIQLASH: mat-select qiymati endi +998 ni ko'rsatyaptimi?
+      const shown = await page
+        .evaluate(() => {
+          const v = document.querySelector(
+            'mat-select[formcontrolname="dialcode"] .mat-mdc-select-value, mat-select[formcontrolname="dialcode"] .mat-select-value, mat-select[formcontrolname="dialcode"]',
+          );
+          return (v?.textContent || "").replace(/\s+/g, " ").trim();
+        })
+        .catch(() => "");
+      if (shown.includes(want)) {
+        step(`Dial code tanlandi (+${want}) ✓`);
+      } else {
+        step(`Dial code bosildi (+${want}) — qiymat: "${shown || "—"}"`);
+      }
       return true;
     }
     step("Dial code varianti topilmadi (+" + want + ")");
@@ -271,9 +331,14 @@ async function checkConsentBoxes(
   let total = 0;
   let checked = 0;
   try {
-    const boxes = page.locator(
-      "mat-checkbox, .mat-mdc-checkbox, .mat-checkbox, input[type='checkbox']",
-    );
+    // VFS register = 3 ta <mat-checkbox> (processPerDataAgreed /
+    // intTransPerDataAgreed / termAndConditionAgreed). mat-checkbox wrapper'ni
+    // nishonlaymiz (ichki yashirin input'ni EMAS — aks holda ikki marta toggle
+    // bo'lib qolardi). mat-checkbox bo'lmasa oddiy input[type=checkbox]'ga o'tamiz.
+    let boxes = page.locator("mat-checkbox, .mat-mdc-checkbox, .mat-checkbox");
+    if ((await boxes.count()) === 0) {
+      boxes = page.locator("input[type='checkbox']");
+    }
     total = await boxes.count();
     for (let i = 0; i < total; i++) {
       const box = boxes.nth(i);
@@ -393,6 +458,7 @@ export async function registerToBooking(
   }
 
   const pageErrors: string[] = [];
+  const netCaptures: NetCapture[] = [];
   let closeSession: (() => Promise<void>) | null = null;
   // Sticky proxy: shu user (email) doim bir xil IP oladi (register profil bilan).
   const profileKey = opts?.profileKey || email;
@@ -406,6 +472,7 @@ export async function registerToBooking(
     const proxyOn = isProxyEnabled() && !opts?.noProxy;
     let lastGotoError = false;
     let lastNoSuchKey = false;
+    let lastLandedBad = false;
     let pageOpened = false;
 
     for (let attempt = 0; attempt < maxIpRetries; attempt++) {
@@ -437,31 +504,54 @@ export async function registerToBooking(
       });
       p.on("response", (res: import("playwright").Response) => {
         const s = res.status();
+        const u = res.url();
         if (s >= 400) {
-          pageErrors.push(`HTTP ${s}: ${res.url().slice(0, 80)}`.slice(0, 200));
+          pageErrors.push(`HTTP ${s}: ${u.slice(0, 80)}`.slice(0, 200));
+        }
+        // To'liq ushlash: VFS form/config/auth API'lari (ayniqsa xato bo'lsa) —
+        // qaysi header/param kamligini bilish uchun request+response saqlaymiz.
+        const isVfsApi =
+          /lift-api|litf-api|lift\.vfsglobal|vfsglobal\.com\/(.*\/)?(configuration|data|account|user|register|log|otp|token)/i.test(
+            u,
+          );
+        if (
+          isVfsApi &&
+          (s >= 400 || /configuration\/fields|\/data\//i.test(u))
+        ) {
+          void (async () => {
+            try {
+              const req = res.request();
+              const reqHeaders = await req.allHeaders().catch(() => ({}));
+              const resHeaders = await res.allHeaders().catch(() => ({}));
+              let body = "";
+              try {
+                body = (await res.text()).slice(0, 4000);
+              } catch {
+                /* body o'qib bo'lmadi */
+              }
+              netCaptures.push({
+                url: u,
+                method: req.method(),
+                status: s,
+                requestHeaders: reqHeaders,
+                requestBody: req.postData() || null,
+                responseHeaders: resHeaders,
+                responseBody: body,
+              });
+            } catch {
+              /* ignore */
+            }
+          })();
         }
       });
 
-      // Warmup: login bilan bir xil — avval yengilroq sahifa (region cookie +
-      // Cloudflare). .env: BOOKING_WARMUP_URL. VFS NoSuchKey 404 bo'lsa qayta
-      // yuklaymiz (region cookie o'rnashishi uchun) — keyin register ochiladi.
-      const warmupUrl = (process.env.BOOKING_WARMUP_URL || "").trim();
-      if (warmupUrl && warmupUrl !== url && attempt === 0) {
-        step("Asosiy sahifa (warmup) ochilmoqda...");
-        await loadWithHealing(p, warmupUrl, step, pageErrors, {
-          waitUntil: "domcontentloaded",
-          maxReloads: 2,
-          label: "warmup",
-        });
-        await waitForCloudflareClear(p, step);
-        if (await acceptCookies(p)) step("Cookie qabul qilindi");
-        await humanPause(400, 800);
-        step("Warmup tugadi, register sahifasiga o'tilmoqda...");
-      }
-
+      // To'g'ridan-to'g'ri REGISTER sahifasi — login/warmup YO'Q (foydalanuvchi
+      // talabiga ko'ra). Ortiqcha sahifa ochish (login -> register) VFS
+      // API'larini IKKI barobar chaqiradi va sticky IP'ni tezroq rate-limit
+      // (429) qiladi — natijada forma render bo'lmay page-not-found'ga tushadi.
+      // Shuning uchun faqat register'ni ochamiz. NoSuchKey 404 flaky bo'lsa
+      // healing qayta yuklaydi (CloudFront qiziydi).
       step("Register sahifasi ochilmoqda...");
-      // VFS S3 NoSuchKey 404 FLAKY — bir necha marta qayta yuklab ko'ramiz
-      // (CloudFront qiziydi). .env: BOOKING_REGISTER_RELOAD_RETRIES (default 4).
       const healed = await loadWithHealing(p, url, step, pageErrors, {
         waitUntil: "domcontentloaded",
         maxReloads: Math.max(
@@ -473,31 +563,58 @@ export async function registerToBooking(
       const gotoError = healed.gotoError;
       base.statusCode = healed.statusCode;
       const noSuchKey = healed.noSuchKey;
+
+      if (!gotoError && !noSuchKey && attempt === 0 && shouldLogExitIp()) {
+        base.exitIp = await readExitIp(p);
+        step(`Exit IP: ${base.exitIp || "—"}`);
+      }
+
+      // Forma render bo'lishini KUTAMIZ: email maydoni CHIQADI, YOKI VFS config
+      // API (configuration/fields) 429 bo'lsa SPA `page-not-found`ga REDIRECT
+      // qiladi. Redirect ASINXRON (goto HTTP 200 qaytargan bo'lsa ham keyin
+      // bo'ladi) — shu sabab navigatsiyadan keyin kutib, so'ng URL'ni tekshiramiz.
+      if (!gotoError && !noSuchKey) {
+        await p
+          .waitForFunction(
+            () =>
+              !!document.querySelector(
+                '#inputEmail, input[formcontrolname="emailid"], #email, input[formcontrolname="email"], input[type="email"]',
+              ) || /page-not-found/i.test(location.href),
+            undefined,
+            { timeout: 20000 },
+          )
+          .catch(() => {});
+      }
+
+      // VFS backend xatosi: register o'rniga /page-not-found'ga tushadi (500/429).
+      const landedBad = !gotoError && /page-not-found/i.test(p.url());
+      if (landedBad) pageErrors.push(`landed: ${p.url().slice(0, 90)}`);
+
       step(
         gotoError
           ? "Sahifa ochilmadi (proxy/ulanish xatosi)"
           : noSuchKey
             ? `VFS 404 (NoSuchKey) — sahifa kelmadi (HTTP ${base.statusCode ?? "?"})`
-            : `Sahifa ochildi (HTTP ${base.statusCode ?? "?"})`,
+            : landedBad
+              ? "VFS backend xatosi — page-not-found'ga tushdi"
+              : `Sahifa tayyor (HTTP ${base.statusCode ?? "?"})`,
       );
 
-      if (!gotoError && !noSuchKey && shouldLogExitIp()) {
-        base.exitIp = await readExitIp(p);
-        step(`Exit IP: ${base.exitIp || "—"}`);
-      }
-
       const cleared = gotoError ? false : await waitForCloudflareClear(p, step);
-      // VFS NoSuchKey 404 = sahifa kelmadi -> yangi IP bilan qayta urinamiz
-      // (region cookie IP'ga bog'liq bo'lishi mumkin — toza IP yordam beradi).
+      // 404/NoSuchKey yoki page-not-found = sahifa kelmadi -> yangi IP bilan
+      // qayta urinamiz (region cookie / rate-limit IP'ga bog'liq bo'lishi mumkin).
       const blocked =
         gotoError ||
         base.statusCode === 403 ||
         base.statusCode === 404 ||
         noSuchKey ||
+        landedBad ||
         !cleared;
       lastGotoError = gotoError;
       lastNoSuchKey = noSuchKey;
-      if (!gotoError && base.statusCode != null && !noSuchKey) pageOpened = true;
+      lastLandedBad = landedBad;
+      if (!gotoError && base.statusCode != null && !noSuchKey && !landedBad)
+        pageOpened = true;
 
       if (!blocked || !proxyOn || attempt === maxIpRetries - 1) {
         if (blocked) {
@@ -543,11 +660,28 @@ export async function registerToBooking(
       };
     }
 
+    // Barcha urinishlardan keyin ham backend xatosi (page-not-found, 500/429).
+    // Ko'pincha IP rate-limit/flagged — boshqa IP bilan urinish kerak.
+    if (!pageOpened && lastLandedBad) {
+      await dumpDebug(page, "register-pnf").catch(() => {});
+      await humanPause(600, 900); // async body o'qishlar tugashi uchun
+      dumpNetwork(netCaptures, "register-pnf-net");
+      if (closeSession) await closeSession().catch(() => {});
+      closeSession = null;
+      base.finalUrl = page.url();
+      base.pageError = pageErrors.slice(0, 10).join(" | ");
+      return {
+        ...base,
+        note: "VFS backend xatosi (500 / page-not-found) — IP rate-limit bo'lishi mumkin. Boshqa IP bilan qayta urinib ko'ring.",
+      };
+    }
+
     if (await acceptCookies(page)) step("Cookie qabul qilindi");
 
-    // EMAIL — Angular Material register formasi.
+    // EMAIL — VFS register: <input id="inputEmail" formcontrolname="emailid"
+    // type="text"> (DIQQAT: formcontrolname "email" EMAS "emailid", type=email EMAS).
     const emailSel =
-      '#email, input[formcontrolname="email"], input[type="email"]';
+      '#inputEmail, input[formcontrolname="emailid"], input[placeholder="jane.doe@email.com"], #email, input[formcontrolname="email"], input[type="email"]';
     await page
       .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
       .catch(() => {});
@@ -567,8 +701,42 @@ export async function registerToBooking(
     } else {
       step("Email maydoni topilmadi!");
       await dumpDebug(page, "register-noemail").catch(() => {});
+      await humanPause(600, 900); // async body o'qishlar tugashi uchun
+      dumpNetwork(netCaptures, "register-noemail-net");
     }
     await humanPause();
+
+    // RATE-LIMIT GUARD: VFS config API 429 bo'lsa email'dan keyin sahifa
+    // page-not-found'ga redirect bo'ladi va forma YO'QOLADI. Shu yerda
+    // tekshiramiz — bloklangan bo'lsa qolgan maydonlarni 60s behuda kutmaymiz.
+    const blockCode = await detectRegisterBlock(page);
+    if (blockCode) {
+      step(
+        blockCode === "429201"
+          ? "VFS rate-limit (429201) — Permission Issue, ~2 soat cooldown"
+          : blockCode === "429001"
+            ? "VFS akkaunt bloki (429001) — unusual activity"
+            : blockCode === "page-not-found"
+              ? "VFS page-not-found — config API 429 (rate-limit)"
+              : "VFS rate-limit (429) — ko'p so'rov",
+      );
+      await dumpDebug(page, "register-ratelimit").catch(() => {});
+      base.finalUrl = page.url();
+      base.pageError = [`block: ${blockCode}`, ...pageErrors]
+        .slice(0, 10)
+        .join(" | ");
+      if (closeSession) await closeSession().catch(() => {});
+      closeSession = null;
+      return {
+        ...base,
+        note:
+          blockCode === "429201"
+            ? "VFS rate-limit (429201 Permission Issue) — ~2 soat kuting yoki boshqa IP. Ko'p urinish bloklaydi."
+            : blockCode === "429001"
+              ? "VFS akkaunt bloklandi (429001 unusual activity) — kuting yoki boshqa akkaunt."
+              : "VFS page-not-found (config API 429 rate-limit) — boshqa IP bilan urinib ko'ring.",
+      };
+    }
 
     // PASSWORD — ko'rinadigan parol inputi (confirm'dan farqli birinchisi).
     const passSel =
@@ -604,9 +772,10 @@ export async function registerToBooking(
     base.dialCodeSelected = await selectDialCode(page, dial, step);
     await humanPause();
 
-    // MOBILE NUMBER — lokal raqam (dial codesiz).
+    // MOBILE NUMBER — lokal raqam (dial codesiz). VFS: formcontrolname="contact"
+    // type="text" (DIQQAT: "mobileNumber" EMAS "contact").
     const phoneSel =
-      '#mobileNumber, input[formcontrolname="mobileNumber"], input[formcontrolname="mobile"], input[formcontrolname="phoneNumber"], input[type="tel"]';
+      'input[formcontrolname="contact"], #mobileNumber, input[formcontrolname="mobileNumber"], input[formcontrolname="mobile"], input[formcontrolname="phoneNumber"], input[type="tel"]';
     let phoneEl = page.locator(phoneSel).first();
     if ((await phoneEl.count()) === 0) {
       // Zaxira: "mobile"/"phone" so'zli ko'rinadigan input.

@@ -49,6 +49,38 @@ export async function dumpDebug(
   }
 }
 
+/** Bitta tarmoq so'rovi (request+response) to'liq ma'lumoti — debug uchun. */
+export type NetCapture = {
+  url: string;
+  method: string;
+  status: number;
+  requestHeaders: Record<string, string>;
+  requestBody: string | null;
+  responseHeaders: Record<string, string>;
+  responseBody: string;
+};
+
+/**
+ * Tarmoq so'rovlari (NetCapture[]) ni uploads/debug ga JSON qilib saqlaydi.
+ * VFS API'lari nega 429/500 berayotganini (qaysi header/param kam) ko'rish uchun.
+ * Saqlangan fayl yo'lini qaytaradi (yoki null).
+ */
+export function dumpNetwork(captures: NetCapture[], tag: string): string | null {
+  if (!captures.length) return null;
+  try {
+    const dir = path.join(process.cwd(), "uploads", "debug");
+    fs.mkdirSync(dir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const file = path.join(dir, `${tag}-${ts}.json`);
+    fs.writeFileSync(file, JSON.stringify(captures, null, 2), "utf8");
+    // eslint-disable-next-line no-console
+    console.log(`[debug] tarmoq saqlandi: ${file} (${captures.length} so'rov)`);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
 /** Sahifa matnidan tasdiqlash/appointment raqamini ajratadi. */
 export function extractRef(text: string): string | null {
   const patterns = [

@@ -148,7 +148,53 @@ services:
       BOOKING_HEADLESS: "false"
       BOOKING_OS_CLICK: "true"
       # Slot-monitor token/sessiyasi doimiy volume'da saqlansin (qayta login kam).
-      SLOT_MONITOR_PROFILE_DIR: /profiles/slot-monitor
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Gmail aktivatsiya listener (alohida microservice). Doim ishlaydi: har
+  # MAIL_WORKER_INTERVAL_MS (default 60s) da register tugagan, lekin hali
+  # aktivlashmagan arizachilarni oladi (activationStatus pending/failed,
+  # registerFinishedAt > MAIL_WORKER_STALE_MIN eski — inline aktivatsiya bilan
+  # to'qnashmaslik uchun). Gmail qutidan aktivatsiya xatini QISQA kutadi; xat
+  # kelsa linkni userning register profilida (sticky IP) ochib, 'activated'
+  # qiladi. IMAP sozlanmagan bo'lsa bo'sh aylanadi. Bitta replica yetarli.
+  mail-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: visa-crm-mail-worker
+    # Aktivatsiya linki register profilida ochiladi — order/slot worker bilan
+    # bir xil brauzer yo'li (Xvfb + real Chrome) ishlatiladi.
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"]
+    command: npm run worker:mail
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: mysql://root:khurshid-2827@mysql:3306/visa_crm_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+      BOOKING_PROFILE_DIR: /profiles
+      # Sikl oralig'i va inline aktivatsiya bilan to'qnashmaslik chegarasi.
+      MAIL_WORKER_INTERVAL_MS: 60000
+      MAIL_WORKER_STALE_MIN: 5
+      MAIL_WORKER_LOOKBACK_HOURS: 48
+      MAIL_WORKER_CONCURRENCY: 2
+      MAIL_WORKER_MAIL_WAIT_MS: 8000
+      # CDP rejimi — register profili real Google Chrome bilan ochiladi.
+      BOOKING_CHROME_CDP: "true"
+      BOOKING_CHROME_PATH: /usr/bin/google-chrome
+      # Register profili bilan bir xil session (Xvfb + non-headless).
+      BOOKING_XVFB: "true"
+      DISPLAY: ":99"
+      BOOKING_HEADLESS: "false"
+      BOOKING_OS_CLICK: "true"
     volumes:
       - .:/app
       - app_node_modules:/app/node_modules

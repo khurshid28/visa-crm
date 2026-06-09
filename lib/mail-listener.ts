@@ -113,6 +113,11 @@ export async function waitForActivationMail(
 
   const want = normalizeEmail(toEmail);
   if (!want) return null;
+  // Cross-domen yo'naltirish uchun: "@" dan oldingi local-part ham
+  // solishtiriladi. Masalan generatsiya qilingan sardor@uzbekviza.uz (z bilan)
+  // xati info@uzbekvisa.uz (s bilan) qutisiga kelsa ham, "To" local-part
+  // bo'yicha topiladi (forward domenni almashtirsa ham ishlaydi).
+  const wantLocal = want.split("@")[0] || "";
 
   const timeoutMs =
     opts.timeoutMs ?? Number(process.env.ACTIVATION_TIMEOUT_MS || 180000);
@@ -179,7 +184,12 @@ export async function waitForActivationMail(
           if (headerTo)
             toAddrs.push(...headerTo.split(/[,;\s]+/).map(normalizeEmail));
 
-          const matchesTo = toAddrs.includes(want);
+          // Avval to'liq email bo'yicha, topilmasa local-part bo'yicha
+          // (cross-domen forward: domen o'zgargan, local-part saqlangan holat).
+          const matchesTo =
+            toAddrs.includes(want) ||
+            (wantLocal.length >= 3 &&
+              toAddrs.some((a) => (a.split("@")[0] || "") === wantLocal));
           if (!matchesTo) continue;
 
           // Jo'natuvchi filtri.

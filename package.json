@@ -10,6 +10,7 @@
     "bot": "tsx scripts/bot.ts",
     "worker:order": "tsx scripts/order-worker.ts",
     "worker:slot": "tsx scripts/slot-worker.ts",
+    "worker:mail": "tsx scripts/mail-worker.ts",
     "slot:check": "tsx scripts/slot-check-test.ts",
     "captcha:click": "tsx scripts/captcha-click-test.ts",
     "osclick:proof": "tsx scripts/os-click-proof.ts",
@@ -17,6 +18,8 @@
     "login:test": "tsx scripts/login-test.ts",
     "login:test:parallel": "tsx scripts/login-parallel-test.ts",
     "register:test": "tsx scripts/register-test.ts",
+    "mail:test": "tsx scripts/mail-test.ts",
+    "mail:watch": "tsx scripts/mail-test.ts --watch",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio"
