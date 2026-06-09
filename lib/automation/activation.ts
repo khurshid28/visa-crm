@@ -11,7 +11,7 @@
 import { proxyMetaFor, shouldLogExitIp } from "../proxy";
 import type { AutomationApplicant, ActivationResult } from "./types";
 import { openBrowserContext, profileDirFor } from "./browser";
-import { readExitIp } from "./page-utils";
+import { readExitIp, dumpDebug } from "./page-utils";
 
 export async function runActivation(
   applicant: AutomationApplicant,
@@ -21,6 +21,19 @@ export async function runActivation(
     // qiymat beradi, inline (booking) esa env default (3 daqiqa) ishlatadi.
     mailWaitMs?: number;
     mailPollMs?: number;
+    // CDP profil bazasi — register bilan BIR XIL papka (aynan yaratilgan gmail
+    // nomli papka) ishlatish uchun. register-full shu bazani uzatadi.
+    cdpProfileBase?: string;
+    // Aktivatsiya register SESSIYASINI qayta ishlatishi kerak — shuning uchun
+    // default: profilni TOZALAMAYMIZ (env BOOKING_CDP_FRESH_PROFILE=true bo'lsa ham).
+    cdpFreshProfile?: boolean;
+    // Pochta poll'i har safar chaqiriladi (jonli "kutilmoqda..." progressi uchun).
+    onMailPoll?: (info: {
+      attempt: number;
+      elapsedMs: number;
+      remainingMs: number;
+      newScanned: number;
+    }) => void;
   },
 ): Promise<ActivationResult> {
   const toEmail = applicant.generatedEmail || applicant.email || null;
@@ -64,12 +77,12 @@ export async function runActivation(
     };
   }
 
-  const mail = await waitForActivationMail(
-    toEmail,
-    opts?.mailWaitMs != null
+  const mail = await waitForActivationMail(toEmail, {
+    ...(opts?.mailWaitMs != null
       ? { timeoutMs: opts.mailWaitMs, pollMs: opts.mailPollMs }
-      : {},
-  );
+      : {}),
+    onPoll: opts?.onMailPoll,
+  });
   if (!mail) {
     return {
       ok: false,
@@ -92,6 +105,12 @@ export async function runActivation(
     const session = await openBrowserContext(
       profileDirFor("register", profileKey),
       { profileKey },
+      {
+        cdpProfileBase: opts?.cdpProfileBase,
+        // Aktivatsiya register sessiyasini (cookie/login) qayta ishlatadi —
+        // shuning uchun profilni TOZALAMAYMIZ (default: false).
+        cdpFreshProfile: opts?.cdpFreshProfile ?? false,
+      },
     );
     closeSession = session.close;
 
@@ -128,6 +147,11 @@ export async function runActivation(
     await page
       .waitForLoadState("networkidle", { timeout: 10000 })
       .catch(() => {});
+    // Aktivatsiya endpoint'i akkauntni faollashtirib, ko'pincha boshqa sahifaga
+    // (login/success) YO'NALTIRADI — bu in-flight Angular bundle so'rovlarini
+    // net::ERR_ABORTED qiladi (ZARARSIZ). Redirect joylashishini biroz kutamiz.
+    await page.waitForTimeout(1500);
+    const finalUrl = page.url();
 
     if (shouldLogExitIp()) {
       exitIp = await readExitIp(page);
@@ -140,16 +164,33 @@ export async function runActivation(
         .catch(() => "")) || ""
     ).toLowerCase();
 
+    // Aktivatsiya sahifasini debug uchun saqlaymiz (ko'rish/tekshirish uchun).
+    await dumpDebug(page, "activation-result").catch(() => {});
+
     await closeSession();
     closeSession = null;
 
+    // Redirect tufayli abort bo'lgan asset so'rovlari (net::ERR_ABORTED/CANCELED)
+    // ZARARSIZ — ularni xatolar ro'yxatidan olib tashlaymiz (muvaffaqiyatni
+    // xato qilib ko'rsatmasin). Cloudflare telemetriya 401'ini ham chiqaramiz.
+    const realErrors = pageErrors.filter(
+      (e) =>
+        !e.includes("ERR_ABORTED") &&
+        !e.includes("ERR_CANCELED") &&
+        !e.includes("challenges.cloudflare.com"),
+    );
+    const errStr = realErrors.length
+      ? realErrors.slice(0, 10).join(" | ")
+      : null;
+
     // Xatolik belgilari (link eskirgan/yaroqsiz bo'lsa).
     const failMarks = [
-      "expired",
-      "invalid",
-      "not valid",
       "link has expired",
-      "muddati",
+      "link is invalid",
+      "invalid link",
+      "not valid",
+      "muddati o'tgan",
+      "muddati tugagan",
     ];
     if (failMarks.some((m) => body.includes(m))) {
       return {
@@ -163,24 +204,65 @@ export async function runActivation(
         requestedAt,
         openedAt,
         navMs,
-        pageError: pageErrors.length
-          ? pageErrors.slice(0, 10).join(" | ")
-          : null,
+        pageError: errStr,
       };
     }
+
+    // "Allaqachon faollashtirilgan" — bu ham MUVAFFAQIYAT (akkaunt faol).
+    if (
+      body.includes("already") &&
+      (body.includes("activat") || body.includes("verif"))
+    ) {
+      return {
+        ok: true,
+        link: mail.link,
+        to: toEmail,
+        note: "Akkaunt allaqachon faollashtirilgan",
+        ...baseMeta,
+        exitIp,
+        statusCode,
+        requestedAt,
+        openedAt,
+        navMs,
+        pageError: errStr,
+      };
+    }
+
+    // Ijobiy tasdiq belgilari (akkaunt haqiqatan faollashdi).
+    const successMarks = [
+      "successfully activated",
+      "account activated",
+      "has been activated",
+      "account has been created",
+      "email verified",
+      "email has been verified",
+      "verification successful",
+      "successfully verified",
+      "activation successful",
+      "thank you for verifying",
+      "muvaffaqiyatli",
+      "faollashtirildi",
+    ];
+    const confirmed = successMarks.some((m) => body.includes(m));
+    // VFS aktivatsiyadan keyin login/dashboard sahifasiga yo'naltiradi.
+    const onAuthPage = /\/login|\/dashboard/i.test(finalUrl);
 
     return {
       ok: true,
       link: mail.link,
       to: toEmail,
-      note: "Aktivatsiya bajarildi (link ochildi)",
+      note: confirmed
+        ? "Aktivatsiya TASDIQLANDI (akkaunt faollashtirildi)"
+        : onAuthPage
+          ? "Aktivatsiya bajarildi (login sahifasiga yo'naltirildi)"
+          : `Aktivatsiya bajarildi (link ochildi, HTTP ${statusCode ?? "?"})`,
       ...baseMeta,
       exitIp,
       statusCode,
       requestedAt,
       openedAt,
       navMs,
-      pageError: pageErrors.length ? pageErrors.slice(0, 10).join(" | ") : null,
+      pageError: errStr,
     };
   } catch (err) {
     if (closeSession) await closeSession().catch(() => {});

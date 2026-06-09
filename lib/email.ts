@@ -1,12 +1,12 @@
 // Har bir arizachi uchun tizim email manzilini yaratadi.
 // Format: {ism}.{familiya}{id}@DOMEN  (faqat lotin harf/raqam)
-// Masalan: sadriddin.orziev123@uzbekviza.uz
+// Masalan: sadriddin.orziev123@uzbekvisa.uz
 // Domen .env dan keladi. Klientda ham ishlashi uchun NEXT_PUBLIC_ ham o'qiymiz.
 
 export const EMAIL_DOMAIN =
   process.env.EMAIL_DOMAIN?.trim() ||
   process.env.NEXT_PUBLIC_EMAIL_DOMAIN?.trim() ||
-  "uzbekviza.uz";
+  "uzbekvisa.uz";
 
 function slug(part: string): string {
   return part
@@ -25,14 +25,14 @@ export function buildEmail(name: string, surname: string, id?: number): string {
   return `${base}${suffix}@${EMAIL_DOMAIN}`;
 }
 
-// Har bir arizachi uchun tizim (VFS/Google akkaunt) parolini deterministik
-// yaratadi. Email kabi — DBda saqlanmaydi, har safar bir xil chiqadi.
+// Har bir arizachi uchun tizim (VFS) parolini deterministik yaratadi.
+// DBda saqlanadi (applicant.generatedPassword) — har safar bir xil chiqishi shart.
 //
-// Google "juda oddiy / keng tarqalgan" parollarni rad etadi. Shuning uchun:
-//   - uzunligi >= 12 belgi
-//   - katta + kichik harf + raqam + maxsus belgi
-//   - oddiy lug'at so'zi bo'lmasligi uchun ichiga hashdan kelgan belgilar
-// Format namunasi: "Sadriddin#5025Kp9!" kabi.
+// VFS talabi AYNAN: "min 8, max 15 belgi; kamida 1 katta harf, 1 kichik harf,
+// 1 raqam va 1 maxsus belgi ($ @ # ! % * ?)".
+//   - maxsus belgi FAQAT shu to'plamdan ($@#!%*?) — boshqasi (^ & - _ = +) RAD etiladi
+//   - umumiy uzunlik 15 dan oshmasligi shart (avval 16 belgi edi — rad etilardi)
+// Format namunasi: "Sadrid#5025Kp9" kabi (12..14 belgi).
 export function buildPassword(
   name: string,
   surname: string,
@@ -40,7 +40,9 @@ export function buildPassword(
 ): string {
   const first = slug(String(name).split(/\s+/)[0] || "");
   const cap = first ? first[0].toUpperCase() + first.slice(1) : "User";
-  const base = cap.length >= 4 ? cap : (cap + "viza").slice(0, 4);
+  // Bazani 6 belgigacha qisqartiramiz — umumiy uzunlik 15 dan oshmasin
+  // (base<=6 + sym1 + tail4 + up1 + lo1 + digit1 = 12..14 belgi).
+  const base = (cap.length >= 4 ? cap : (cap + "viza").slice(0, 4)).slice(0, 6);
 
   const digits = String(passportNumber || "").replace(/\D/g, "");
   // Passport raqami oxirgi 4 raqami; bo'lmasa familiyadan barqaror son.
@@ -61,22 +63,16 @@ export function buildPassword(
   }
   hash = hash >>> 0;
 
-  // Hashdan bir nechta harf (katta + kichik aralash) hosil qilamiz —
-  // lug'at so'ziga o'xshamasligi va kuchli bo'lishi uchun.
-  // MUHIM: belgisiz siljitish (>>>) ishlatamiz — oddiy (>>) katta hash'larni
-  // manfiy qiladi va indeks/charCode buziladi (undefined, noto'g'ri belgilar).
+  // Hashdan bir nechta belgi (kuchli, lug'at so'ziga o'xshamasin).
+  // MUHIM: belgisiz siljitish (>>>) — oddiy (>>) katta hash'larni manfiy qiladi.
   const up1 = String.fromCharCode(65 + (hash % 26)); // A-Z
-  const up2 = String.fromCharCode(65 + ((hash >>> 7) % 26)); // A-Z
   const lo1 = String.fromCharCode(97 + ((hash >>> 5) % 26)); // a-z
-  const lo2 = String.fromCharCode(97 + ((hash >>> 11) % 26)); // a-z
   const extraDigit = String((hash >>> 10) % 10); // 0-9
 
-  // Maxsus belgilar (Google qabul qiladiganlar) — kengroq to'plam.
-  const symbols = "!@#$%^&*-_=+?";
+  // Maxsus belgi FAQAT VFS ruxsat etgan to'plamdan ($ @ # ! % * ?).
+  const symbols = "$@#!%*?";
   const sym1 = symbols[hash % symbols.length];
-  const sym2 = symbols[(hash >>> 13) % symbols.length];
-  const sym3 = symbols[(hash >>> 17) % symbols.length];
 
-  // Yig'amiz: Ism + belgi + 4 raqam + harflar(katta/kichik) + raqam + belgilar.
-  return `${base}${sym1}${tail}${up1}${lo1}${sym2}${up2}${lo2}${extraDigit}${sym3}`;
+  // Yig'amiz: Ism(base) + maxsus + 4 raqam + katta + kichik + raqam = 12..14 belgi.
+  return `${base}${sym1}${tail}${up1}${lo1}${extraDigit}`;
 }

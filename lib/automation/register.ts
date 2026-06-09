@@ -152,9 +152,10 @@ async function detectRegisterBlock(p: Page): Promise<string | null> {
 }
 
 /**
- * "Dial Code" dropdownidan +998 (yoki berilgan kod) ni tanlaydi.
- * VFS Angular Material mat-select (yoki native select / qidiruvli overlay)
- * bo'lishi mumkin — bir necha usulni ketma-ket sinaydi. Hech qachon throw qilmaydi.
+ * "Dial Code" dropdownidan FAQAT +998 (yoki berilgan kod) ni tanlaydi.
+ * MUHIM: boshqa davlat kodi (masalan +992 Tojikiston) adashib tanlanmasin —
+ * ANIQ "+998" matnli variant qidiriladi, tanlangach qiymat TASDIQLANADI va
+ * mos kelmasa 3 martagacha qayta uriniladi. Hech qachon throw qilmaydi.
  */
 async function selectDialCode(
   page: Page,
@@ -162,10 +163,48 @@ async function selectDialCode(
   step: (m: string) => void,
 ): Promise<boolean> {
   const want = (dialCode || "998").replace(/\D/g, "") || "998";
+  // "+998" ni ANIQ tutadigan regex (ketidan boshqa raqam kelmasin — "+9981"
+  // yoki "+992" ga tushib qolmaslik uchun).
+  const exactPlus = new RegExp("\\+\\s*" + want + "(?!\\d)");
+  const wordNum = new RegExp("(?<!\\d)" + want + "(?!\\d)");
+
+  // mat-select / native select'da HOZIR ko'rsatilayotgan qiymatni o'qiydi.
+  const readShown = async (): Promise<string> =>
+    (await page
+      .evaluate(() => {
+        const el = document.querySelector(
+          'mat-select[formcontrolname="dialcode"] .mat-mdc-select-value, mat-select[formcontrolname="dialcode"] .mat-select-value, mat-select[formcontrolname="dialcode"]',
+        );
+        const nativeSel = document.querySelector(
+          'select[formcontrolname="dialcode"], select[name*="dial" i]',
+        ) as HTMLSelectElement | null;
+        const nativeTxt = nativeSel
+          ? nativeSel.options[nativeSel.selectedIndex]?.text || nativeSel.value
+          : "";
+        return ((el?.textContent || "") + " " + (nativeTxt || ""))
+          .replace(/\s+/g, " ")
+          .trim();
+      })
+      .catch(() => "")) || "";
+
+  // 0) ALLAQACHON to'g'rimi? VFS O'zbekiston sayti ko'pincha +998 ni default
+  //    qilib qo'yadi — bunday holatda TEGMAYMIZ (ortiqcha ochib, adashib boshqa
+  //    kodni tanlab qo'ymaslik uchun).
+  try {
+    const current = await readShown();
+    if (exactPlus.test(current) || wordNum.test(current)) {
+      step(`Dial code allaqachon +${want} (default) ✓`);
+      return true;
+    }
+  } catch {
+    /* davom etamiz */
+  }
 
   // 1) NATIVE <select> — "dial"/"code"/"country" so'zli select bo'lsa.
   try {
     const nativePicked = await page.evaluate((wanted) => {
+      const plus = new RegExp("\\+\\s*" + wanted + "(?!\\d)");
+      const word = new RegExp("(?<!\\d)" + wanted + "(?!\\d)");
       const selects = Array.from(
         document.querySelectorAll("select"),
       ) as HTMLSelectElement[];
@@ -184,139 +223,207 @@ async function selectDialCode(
         ).toLowerCase();
         if (!/dial|code|country|phone|mobile/.test(block + " " + attrs))
           continue;
-        for (const opt of Array.from(sel.options)) {
-          const t = (opt.text + " " + opt.value).toLowerCase();
-          if (t.includes(wanted) || t.includes("uzbek")) {
-            sel.value = opt.value;
-            sel.dispatchEvent(new Event("change", { bubbles: true }));
-            return true;
-          }
+        // ANIQ "+998" -> "uzbek" -> alohida "998" tartibida tanlaymiz.
+        const opts = Array.from(sel.options);
+        const chosen =
+          opts.find((o) => plus.test(o.text + " " + o.value)) ||
+          opts.find((o) => /uzbek/i.test(o.text + " " + o.value)) ||
+          opts.find((o) => word.test(o.text + " " + o.value));
+        if (chosen) {
+          sel.value = chosen.value;
+          sel.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
         }
       }
       return false;
     }, want);
     if (nativePicked) {
-      step(`Dial code tanlandi (+${want}) ✓`);
-      return true;
+      const shown = await readShown();
+      if (exactPlus.test(shown) || wordNum.test(shown) || shown === "") {
+        step(`Dial code tanlandi (+${want}) ✓`);
+        return true;
+      }
     }
   } catch {
     /* keyingi usul */
   }
 
-  // 2) Angular Material mat-select (yoki [role=combobox]) — "dial" yorlig'iga
-  //    eng yaqin tetikni topib OCHAMIZ.
-  try {
-    const opened = await page.evaluate(() => {
-      // VFS register dial code = <mat-select formcontrolname="dialcode">.
-      // ANIQ shu tetikni birinchi sinaymiz, keyin yorliq/birinchi tetik.
-      const exact = document.querySelector(
-        'mat-select[formcontrolname="dialcode"]',
-      ) as HTMLElement | null;
-      if (exact) {
-        exact.scrollIntoView({ block: "center" });
-        exact.click();
+  // 2) Angular Material mat-select — Playwright locator bilan ISHONCHLI ochamiz,
+  //    +998 variantni tanlaymiz va qiymatni TASDIQLAYMIZ. Sekin proksi/
+  //    virtual-scrollga chidamli: qidiruv inputidan foydalanamiz, kerak bo'lsa
+  //    ro'yxatni skroll qilamiz, overlay yopilishini va qiymat yangilanishini
+  //    kutamiz. 4 martagacha urinamiz.
+  const exactTrigger = page.locator('mat-select[formcontrolname="dialcode"]');
+  const hasExactTrigger = (await exactTrigger.count().catch(() => 0)) > 0;
+
+  const openDropdown = async (): Promise<boolean> => {
+    // Avval ANIQ mat-select'ni Playwright bilan bosamiz — actionability'ni
+    // o'zi kutadi, DOM .click() dan ancha ishonchli (sekin renderga bardosh).
+    if (hasExactTrigger) {
+      const ok = await exactTrigger
+        .first()
+        .click({ timeout: 4000 })
+        .then(() => true)
+        .catch(() => false);
+      if (ok) return true;
+    }
+    // Zaxira: DOM orqali "dial" yorlig'li tetikni topib bosamiz.
+    return page
+      .evaluate(() => {
+        const exact = document.querySelector(
+          'mat-select[formcontrolname="dialcode"]',
+        ) as HTMLElement | null;
+        if (exact) {
+          exact.scrollIntoView({ block: "center" });
+          exact.click();
+          return true;
+        }
+        const triggers = Array.from(
+          document.querySelectorAll(
+            "mat-select, .mat-mdc-select, .mat-select, [role='combobox'], .iti, .iti__selected-flag, ngx-intl-tel-input .dropdown-toggle",
+          ),
+        ) as HTMLElement[];
+        if (triggers.length === 0) return false;
+        let target: HTMLElement | null = null;
+        for (const t of triggers) {
+          const block = (
+            t.closest(
+              ".mat-mdc-form-field, mat-form-field, .field, .form-group, div",
+            )?.parentElement || t.parentElement
+          )?.textContent;
+          if ((block || "").toLowerCase().includes("dial")) {
+            target = t;
+            break;
+          }
+        }
+        // Yorliq topilmasa — BIRINCHI tetik (odatda dial code birinchi).
+        if (!target) target = triggers[0];
+        if (!target) return false;
+        target.scrollIntoView({ block: "center" });
+        target.click();
         return true;
+      })
+      .catch(() => false);
+  };
+
+  const optSel =
+    "mat-option, .mat-mdc-option, .mat-option, [role='option'], .iti__country, li.country";
+
+  // Overlaydagi +998 variantni topadigan locatorlar (eng aniqdan kengga).
+  const optionCandidates = () => [
+    page.locator(optSel).filter({ hasText: exactPlus }),
+    page.locator(optSel).filter({ hasText: /uzbek/i }),
+    page.locator(optSel).filter({ hasText: wordNum }),
+  ];
+
+  // Ko'rinib turgan +998 variantni bosadi (scroll + click).
+  const tryClickOption = async (): Promise<boolean> => {
+    for (const cand of optionCandidates()) {
+      if ((await cand.count().catch(() => 0)) > 0) {
+        const ok = await cand
+          .first()
+          .scrollIntoViewIfNeeded({ timeout: 1500 })
+          .then(() => cand.first().click({ timeout: 4000 }))
+          .then(() => true)
+          .catch(() => false);
+        if (ok) return true;
       }
-      const triggers = Array.from(
-        document.querySelectorAll(
-          "mat-select, .mat-mdc-select, .mat-select, [role='combobox'], .iti, .iti__selected-flag, ngx-intl-tel-input .dropdown-toggle",
-        ),
-      ) as HTMLElement[];
-      if (triggers.length === 0) return false;
-      let target: HTMLElement | null = null;
-      for (const t of triggers) {
-        const block = (
-          t.closest(
-            ".mat-mdc-form-field, mat-form-field, .field, .form-group, div",
-          )?.parentElement || t.parentElement
-        )?.textContent;
-        if ((block || "").toLowerCase().includes("dial")) {
-          target = t;
-          break;
+    }
+    return false;
+  };
+
+  const searchSel =
+    ".mat-select-search-input, input.iti__search-input, input[type='search'], .cdk-overlay-container input:not([type='checkbox']):not([type='radio'])";
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const opened = await openDropdown();
+      if (!opened) {
+        step("Dial code dropdown topilmadi");
+        return false;
+      }
+
+      // Overlay variantlari render bo'lishini kutamiz (sekin proksiga chidamli).
+      await page
+        .waitForSelector(optSel, { timeout: 5000, state: "visible" })
+        .catch(() => {});
+
+      // a) Qidiruv inputi bo'lsa — kodni yozib ro'yxatni qisqartiramiz (uzun
+      //    davlat ro'yxatida +998 virtual-scroll ortida qolib ketmasligi uchun).
+      const searchInput = page.locator(searchSel).first();
+      const hasSearch =
+        (await searchInput.count().catch(() => 0)) > 0 &&
+        (await searchInput.isVisible().catch(() => false));
+      if (hasSearch) {
+        await searchInput.fill("").catch(() => {});
+        await searchInput.type(want, { delay: 40 }).catch(() => {});
+        await humanPause(250, 500);
+      }
+
+      // b) Ko'rinib turgan variantni bosamiz.
+      let clicked = await tryClickOption();
+
+      // c) Topilmasa: qidiruvni tozalab, ro'yxatni bosqichma-bosqich skroll
+      //    qilib +998 ni qidiramiz (virtual-scroll ortidagi variant uchun).
+      if (!clicked) {
+        if (hasSearch) {
+          await searchInput.fill("").catch(() => {});
+          await humanPause(150, 300);
+          clicked = await tryClickOption();
+        }
+        for (let s = 0; s < 12 && !clicked; s++) {
+          await page
+            .evaluate(() => {
+              const vp = document.querySelector(
+                ".cdk-virtual-scroll-viewport",
+              ) as HTMLElement | null;
+              const panel = document.querySelector(
+                ".mat-mdc-select-panel, .mat-select-panel, .cdk-overlay-pane [role='listbox'], .cdk-overlay-pane",
+              ) as HTMLElement | null;
+              const tgt = vp || panel;
+              if (tgt) tgt.scrollBy(0, Math.round(tgt.clientHeight * 0.8));
+            })
+            .catch(() => {});
+          await humanPause(120, 220);
+          clicked = await tryClickOption();
         }
       }
-      // Yorliq topilmasa — sahifadagi BIRINCHI tetik (odatda dial code birinchi).
-      if (!target) target = triggers[0];
-      if (!target) return false;
-      target.scrollIntoView({ block: "center" });
-      target.click();
-      return true;
-    });
-    if (!opened) {
-      step("Dial code dropdown topilmadi");
-      return false;
-    }
 
-    // Overlay variantlari render bo'lishini kutamiz.
-    await page
-      .waitForSelector(
-        "mat-option, .mat-mdc-option, .mat-option, [role='option'], .iti__country, li.country",
-        { timeout: 3000, state: "visible" },
-      )
-      .catch(() => {});
+      // d) Tanlangach overlay yopilishini va qiymat yangilanishini kutamiz
+      //    (Angular qiymatni biroz kechikib yozadi — qisqa qayta o'qish).
+      if (clicked) {
+        await page
+          .waitForSelector(".cdk-overlay-pane " + optSel, {
+            state: "detached",
+            timeout: 2500,
+          })
+          .catch(() => {});
+        let shown = "";
+        for (let r = 0; r < 6; r++) {
+          shown = await readShown();
+          if (exactPlus.test(shown) || wordNum.test(shown)) break;
+          await humanPause(120, 200);
+        }
+        if (exactPlus.test(shown) || wordNum.test(shown)) {
+          step(`Dial code tanlandi (+${want}) ✓`);
+          return true;
+        }
+      }
 
-    // Qidiruv inputi bo'lsa — kodni yozamiz (uzun ro'yxatni filtrlaydi).
-    try {
-      const searchInput = page
-        .locator(
-          ".cdk-overlay-container input, .mat-select-search-input, input.iti__search-input, input[type='search']",
-        )
-        .first();
-      if ((await searchInput.count()) > 0 && (await searchInput.isVisible())) {
-        await searchInput.fill(want).catch(() => {});
-        await humanPause(200, 450);
+      // Mos kelmadi — overlayni yopib qayta uramiz.
+      await page.keyboard.press("Escape").catch(() => {});
+      await humanPause(250, 450);
+      if (attempt === 3) {
+        const shown = await readShown();
+        step(
+          `Dial code +${want} tanlanmadi (oxirgi qiymat: "${shown || "—"}")`,
+        );
       }
     } catch {
-      /* qidiruv yo'q — to'g'ridan-to'g'ri ro'yxatdan tanlaymiz */
+      await page.keyboard.press("Escape").catch(() => {});
     }
-
-    // Kod (yoki "uzbek") ni o'z ichiga olgan variantni bosamiz. +998 ANIQ
-    // mosligini birinchi qidiramiz (boshqa davlat matnida "998" bo'lib qolmasin).
-    const picked = await page.evaluate((wanted) => {
-      const opts = Array.from(
-        document.querySelectorAll(
-          "mat-option, .mat-mdc-option, .mat-option, [role='option'], .iti__country, li.country",
-        ),
-      ) as HTMLElement[];
-      if (opts.length === 0) return false;
-      const norm = (s: string) => (s || "").replace(/\s+/g, " ").trim();
-      const chosen =
-        opts.find((o) => norm(o.textContent || "").includes("+" + wanted)) ||
-        opts.find((o) =>
-          norm(o.textContent || "")
-            .toLowerCase()
-            .includes("uzbek"),
-        ) ||
-        opts.find((o) => norm(o.textContent || "").includes(wanted));
-      if (!chosen) return false;
-      chosen.scrollIntoView({ block: "center" });
-      chosen.click();
-      return true;
-    }, want);
-
-    await humanPause(150, 350);
-    if (picked) {
-      // TASDIQLASH: mat-select qiymati endi +998 ni ko'rsatyaptimi?
-      const shown = await page
-        .evaluate(() => {
-          const v = document.querySelector(
-            'mat-select[formcontrolname="dialcode"] .mat-mdc-select-value, mat-select[formcontrolname="dialcode"] .mat-select-value, mat-select[formcontrolname="dialcode"]',
-          );
-          return (v?.textContent || "").replace(/\s+/g, " ").trim();
-        })
-        .catch(() => "");
-      if (shown.includes(want)) {
-        step(`Dial code tanlandi (+${want}) ✓`);
-      } else {
-        step(`Dial code bosildi (+${want}) — qiymat: "${shown || "—"}"`);
-      }
-      return true;
-    }
-    step("Dial code varianti topilmadi (+" + want + ")");
-    return false;
-  } catch {
-    return false;
   }
+  return false;
 }
 
 /**
@@ -330,65 +437,74 @@ async function checkConsentBoxes(
 ): Promise<{ total: number; checked: number }> {
   let total = 0;
   let checked = 0;
+  // mat-checkbox / input holatini bir xil o'qiydigan yordamchi.
+  const readChecked = (box: import("playwright").Locator) =>
+    box
+      .evaluate((node: Element) => {
+        if (node instanceof HTMLInputElement) return node.checked;
+        const inner = node.querySelector(
+          "input[type='checkbox']",
+        ) as HTMLInputElement | null;
+        if (inner) return inner.checked;
+        const aria = node.getAttribute("aria-checked");
+        if (aria != null) return aria === "true";
+        return /(^|\s)(mat-mdc-checkbox-checked|mat-checkbox-checked)(\s|$)/.test(
+          node.className || "",
+        );
+      })
+      .catch(() => false);
+
   try {
     // VFS register = 3 ta <mat-checkbox> (processPerDataAgreed /
-    // intTransPerDataAgreed / termAndConditionAgreed). mat-checkbox wrapper'ni
-    // nishonlaymiz (ichki yashirin input'ni EMAS — aks holda ikki marta toggle
-    // bo'lib qolardi). mat-checkbox bo'lmasa oddiy input[type=checkbox]'ga o'tamiz.
+    // intTransPerDataAgreed / termAndConditionAgreed). mat-checkbox bo'lmasa
+    // oddiy input[type=checkbox]'ga o'tamiz.
     let boxes = page.locator("mat-checkbox, .mat-mdc-checkbox, .mat-checkbox");
     if ((await boxes.count()) === 0) {
       boxes = page.locator("input[type='checkbox']");
     }
     total = await boxes.count();
+
+    // Har bir checkboxni 3 martagacha (turli strategiya bilan) bosamiz — VFS
+    // register'ning BIRINCHI checkboxi ba'zan birinchi bosishda belgilanmaydi.
     for (let i = 0; i < total; i++) {
       const box = boxes.nth(i);
-      // Joriy holat: belgilangan bo'lsa o'tkazib yuboramiz.
-      const isChecked = await box
-        .evaluate((node: Element) => {
-          if (node instanceof HTMLInputElement) return node.checked;
-          const inner = node.querySelector(
-            "input[type='checkbox']",
-          ) as HTMLInputElement | null;
-          if (inner) return inner.checked;
-          const aria = node.getAttribute("aria-checked");
-          if (aria != null) return aria === "true";
-          return /(^|\s)(mat-mdc-checkbox-checked|mat-checkbox-checked)(\s|$)/.test(
-            node.className || "",
-          );
-        })
-        .catch(() => false);
-      if (isChecked) {
-        checked += 1;
-        continue;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (await readChecked(box)) break; // belgilangan — qayta tegmaymiz
+        try {
+          if (attempt === 0) {
+            // Aniq katakcha (kichik kvadrat) — label ichidagi havolaga tegmaslik uchun.
+            const square = box
+              .locator(".mdc-checkbox, .mat-checkbox-inner-container")
+              .first();
+            if ((await square.count()) > 0)
+              await square.click({ timeout: 4000, force: true });
+            else await box.click({ timeout: 4000, force: true });
+          } else if (attempt === 1) {
+            // Yashirin input'ni to'g'ridan-to'g'ri bosamiz.
+            const input = box.locator("input[type='checkbox']").first();
+            if ((await input.count()) > 0)
+              await input.click({ timeout: 4000, force: true });
+            else await box.click({ timeout: 4000, force: true });
+          } else {
+            // Oxirgi chora: DOM'da inputni bosib, Angular eventlarini yuboramiz.
+            await box.evaluate((node: Element) => {
+              const input = (
+                node instanceof HTMLInputElement
+                  ? node
+                  : node.querySelector("input[type='checkbox']")
+              ) as HTMLInputElement | null;
+              if (input && !input.checked) {
+                input.click();
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            });
+          }
+        } catch {
+          /* keyingi urinish */
+        }
+        await humanPause(180, 420);
       }
-      // Bosamiz: mat-checkbox ichidagi label/ko'rinadigan qism (input yashirin
-      // bo'lishi mumkin — force bilan bosamiz). Inson kabi qisqa pauza.
-      const clickTarget = box
-        .locator("label, .mdc-checkbox, .mat-checkbox-inner-container")
-        .first();
-      const hasInner = (await clickTarget.count()) > 0;
-      try {
-        if (hasInner) await clickTarget.click({ timeout: 4000, force: true });
-        else await box.click({ timeout: 4000, force: true });
-      } catch {
-        await box.click({ timeout: 4000, force: true }).catch(() => {});
-      }
-      await humanPause(180, 420);
-      const nowChecked = await box
-        .evaluate((node: Element) => {
-          if (node instanceof HTMLInputElement) return node.checked;
-          const inner = node.querySelector(
-            "input[type='checkbox']",
-          ) as HTMLInputElement | null;
-          if (inner) return inner.checked;
-          const aria = node.getAttribute("aria-checked");
-          if (aria != null) return aria === "true";
-          return /(^|\s)(mat-mdc-checkbox-checked|mat-checkbox-checked)(\s|$)/.test(
-            node.className || "",
-          );
-        })
-        .catch(() => false);
-      if (nowChecked) checked += 1;
+      if (await readChecked(box)) checked += 1;
     }
     step(`Checkboxlar: ${checked}/${total} belgilandi`);
   } catch {

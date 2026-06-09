@@ -20,6 +20,7 @@
     "login:test": "tsx scripts/login-test.ts",
     "login:test:parallel": "tsx scripts/login-parallel-test.ts",
     "register:test": "tsx scripts/register-test.ts",
+    "register:full": "tsx scripts/register-full.ts",
     "mail:test": "tsx scripts/mail-test.ts",
     "mail:watch": "tsx scripts/mail-test.ts --watch",
     "flow:capture": "tsx scripts/flow-capture.ts",
