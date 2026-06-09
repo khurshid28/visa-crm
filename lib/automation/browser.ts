@@ -17,7 +17,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as net from "net";
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
 import type { Stage } from "./types";
 
 export function envHeadless(): boolean {
@@ -1074,7 +1074,18 @@ async function connectRealChrome(opts?: {
       // Brauzerni yopamiz (bu o'zimiz ochgan Chrome — userniki emas).
       await browser.close().catch(() => {});
       try {
-        child.kill();
+        // MUHIM (Windows): child.kill() faqat launcher jarayonini o'ldiradi —
+        // Chrome jarayon DARAXTI (browser + renderer + gpu + oyna) ochiq qoladi.
+        // taskkill /T (daraxt) /F (majburan) bilan BUTUN daraxtni yopamiz,
+        // aks holda har testdan keyin Chrome oynasi (masalan 403201 sahifasi)
+        // osilib qoladi. Linux/mac'da oddiy kill yetarli (renderer'lar bola).
+        if (process.platform === "win32" && child.pid) {
+          spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+            stdio: "ignore",
+          });
+        } else {
+          child.kill();
+        }
       } catch {
         /* ignore */
       }

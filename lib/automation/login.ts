@@ -282,14 +282,76 @@ export async function loginToBooking(
       };
     }
 
+    // 403 BLOK: barcha IP qayta urinishlaridan keyin ham sahifa HTTP 403 qaytardi
+    // (VFS WAF: {"code":"403201"}). Bu IP darajasidagi blok EMAS — har urinishda
+    // YANGI IP olindi, lekin hammasi 403 oldi => akkaunt/WAF darajasidagi cooldown
+    // (429201 bilan bir xil sabab). U sahifada email/parol/captcha YO'Q, shuning
+    // uchun bekorga 50s+ kutmasdan DARROV chiqamiz va brauzerni yopamiz.
+    if (base.statusCode === 403) {
+      step("BLOK: barcha IP 403 (akkaunt/WAF cooldown — 403201) ✗");
+      base.finalUrl = page.url();
+      base.note =
+        "BLOKLANGAN (HTTP 403 / 403201). Har urinishda yangi IP olindi, lekin hammasi 403 — bu IP emas, akkaunt/WAF darajasidagi cooldown. ~1-2 soat kutilsin (bitta qurilma, VPN/cache tozalab); yangi IP yordam bermaydi.";
+      pageErrors.push("403201: WAF/akkaunt blok (barcha IP 403)");
+      await dumpDebug(page, "login-blocked-403").catch(() => {});
+      if (closeSession) await closeSession().catch(() => {});
+      closeSession = null;
+      base.pageError = pageErrors.slice(0, 10).join(" | ");
+      return base;
+    }
+
     // Cookie banner login sahifasida ham chiqishi mumkin.
     if (await acceptCookies(page)) step("Cookie qabul qilindi");
 
     // EMAIL — Angular Material: ko'rinadigan input #email (yashirin #username emas).
+    // MUHIM: VFS ko'p urinishdan keyin login'ni page-not-found'ga yo'naltirib
+    // "Permission Issue (429201) — 2 soat cooldown" ko'rsatadi. U sahifada
+    // email/parol/captcha YO'Q. Shuning uchun email maydoni YOKI blok sahifasi
+    // — qaysi avval chiqsa, shuni kutamiz (oddiy loginda email ~1-2s da chiqadi,
+    // qo'shimcha kechikish YO'Q; blokda esa 60s+ behuda qidirmasdan DARROV chiqamiz).
     const emailSel = '#email, input[formcontrolname="username"]';
-    await page
-      .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
-      .catch(() => {});
+    const appeared = await Promise.race([
+      page
+        .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
+        .then(() => "email" as const)
+        .catch(() => null),
+      page
+        .waitForFunction(
+          () => {
+            const u = location.href.toLowerCase();
+            const t = (
+              document.body && document.body.innerText
+                ? document.body.innerText
+                : ""
+            ).toLowerCase();
+            return (
+              u.indexOf("page-not-found") >= 0 ||
+              t.indexOf("429201") >= 0 ||
+              t.indexOf("permission issue") >= 0 ||
+              t.indexOf("cooldown period") >= 0 ||
+              t.indexOf("multiple requests within a short period") >= 0
+            );
+          },
+          { timeout: 20000, polling: 500 },
+        )
+        .then(() => "blocked" as const)
+        .catch(() => null),
+    ]);
+
+    // BLOK ANIQLANDI — 2 soat cooldown. Boshqa IP yordam bermaydi (akkaunt
+    // darajasidagi blok), shuning uchun bu yerda davom etmaymiz.
+    if (appeared === "blocked") {
+      step("AKKAUNT/IP BLOKLANDI (429201 — Permission Issue) ✗");
+      base.finalUrl = page.url();
+      base.note =
+        "AKKAUNT/IP VAQTINCHA BLOKLANGAN (429201 — Permission Issue). VFS: ~2 soat kutilsin (bitta qurilmada, VPN/cache tozalab). Boshqa IP yordam bermaydi — bu akkaunt darajasidagi blok.";
+      pageErrors.push("429201: permission issue (2 soat cooldown)");
+      await dumpDebug(page, "login-blocked-429201").catch(() => {});
+      if (closeSession) await closeSession().catch(() => {});
+      closeSession = null;
+      base.pageError = pageErrors.slice(0, 10).join(" | ");
+      return base;
+    }
 
     // TEZLIK: Cloudflare Turnstile token sahifa yuklanishi bilan FONda yechila
     // boshlaydi. Shuning uchun captcha kutishni SHU YERDA (email/parol to'ldirish
@@ -338,11 +400,72 @@ export async function loginToBooking(
     // (tasodifiy nuqtalarda) va yana token to'lishini kutamiz.
     if (captcha.present && !captcha.solved) {
       step("Captcha o'zi o'tmadi — ustiga bosilmoqda...");
-      const clicked = await clickTurnstile(page);
+      // step uzatamiz — OS-klik ichidagi bosqichlar (qaysi klik, qachon token,
+      // CF tekshiruvi) ko'rinadi. clickTurnstile endi to'liq token byudjetini
+      // o'zi kutadi, shuning uchun pastdagi tasdiqlash QISQA (ikki marta 30s emas).
+      const clicked = await clickTurnstile(page, step);
       if (clicked) {
         step("Captcha ustiga bosildi, token kutilmoqda...");
       }
-      captcha = await waitForTurnstile(page);
+      captcha = await waitForTurnstile(
+        page,
+        Number(process.env.BOOKING_CAPTCHA_CONFIRM_MS || "4000"),
+      );
+      base.captchaPresent = captcha.present;
+      base.captchaSolved = captcha.solved;
+    }
+
+    // CAPTCHA RAD ETILDI / iframe chiqmadi (troubleshoot) — SAHIFANI QAYTA
+    // YUKLAB toza Turnstile widget bilan qayta urinamiz (yangi brauzer EMAS).
+    // VFS Turnstile ba'zan "Verification failed" beradi yoki iframe juda kech
+    // render bo'ladi — reload ko'pincha yangi, tez ishlaydigan widget keltiradi.
+    const captchaReloads = Math.max(
+      0,
+      Number(process.env.BOOKING_CAPTCHA_RELOAD_RETRIES || "2"),
+    );
+    for (
+      let rl = 0;
+      rl < captchaReloads && captcha.present && !captcha.solved;
+      rl++
+    ) {
+      step(
+        `Captcha o'tmadi — sahifa qayta yuklanmoqda (${rl + 1}/${captchaReloads})...`,
+      );
+      await page
+        .goto(url, { waitUntil: "domcontentloaded", timeout: 45000 })
+        .catch(() => {});
+      await waitForCloudflareClear(page, step).catch(() => {});
+      if (await acceptCookies(page)) step("Cookie qabul qilindi");
+
+      // Yangi sahifada email/parolni qayta to'ldiramiz (reload tozalaydi).
+      const reCaptcha = waitForTurnstile(
+        page,
+        Number(process.env.BOOKING_CAPTCHA_AUTOPASS_MS || "6000"),
+      );
+      await page
+        .waitForSelector(emailSel, { state: "visible", timeout: 20000 })
+        .catch(() => {});
+      const reEmail = page.locator(emailSel).first();
+      if ((await reEmail.count()) > 0) {
+        base.filledEmail = await fillFieldReliably(page, reEmail, email);
+      }
+      await humanPause();
+      const rePass = page.locator(passSel).first();
+      if ((await rePass.count()) > 0) {
+        base.filledPassword = await fillFieldReliably(page, rePass, password);
+      }
+      await humanPause();
+      step("Email/parol qayta kiritildi");
+
+      captcha = await reCaptcha;
+      if (captcha.present && !captcha.solved) {
+        const clicked = await clickTurnstile(page, step);
+        if (clicked) step("Captcha ustiga bosildi, token kutilmoqda...");
+        captcha = await waitForTurnstile(
+          page,
+          Number(process.env.BOOKING_CAPTCHA_CONFIRM_MS || "4000"),
+        );
+      }
       base.captchaPresent = captcha.present;
       base.captchaSolved = captcha.solved;
     }
@@ -408,7 +531,7 @@ export async function loginToBooking(
     // "Access Restricted for User ID (429001)" ko'rinadi. Bu akkaunt biroz
     // dam olishi kerak — boshqa IP/proxy yordam bermaydi.
     const accountRestricted =
-      /429001|access restricted for user|unusual activity|temporarily restricted/.test(
+      /429001|429201|access restricted for user|unusual activity|temporarily restricted|permission issue|cooldown period|multiple requests within a short period/.test(
         bodyText,
       );
     // Login API (user/login) 4xx/429 qaytarsa — muvaffaqiyatsiz (rate-limit yoki

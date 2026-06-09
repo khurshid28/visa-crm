@@ -27,7 +27,7 @@
 //  sinaladi; OS-klik faqat token kelmaganda (interaktiv) ishga tushadi.
 // ====================================================================
 
-import type { Page } from "playwright";
+import type { Page, Request } from "playwright";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -39,9 +39,14 @@ import { getLastChromePid } from "./browser";
 const TOKEN_INPUT = 'input[name="cf-turnstile-response"]';
 const TURNSTILE_IFRAME =
   'iframe[src*="challenges.cloudflare.com"], .cf-turnstile iframe, #widgetId iframe';
+// MUHIM: VFS'da `.cf-turnstile` klassi YO'Q — Cloudflare'ni o'z konteynerlariga
+// (<div id="widgetId">, <app-cloudflare-captcha-container>, [appcloudflarerecaptcha])
+// joylashtiradi. Widget "bor"ligini aniqlashda BU konteynerlarni ham, token
+// input'ni ham, haqiqiy CF iframe'ni ham hisobga olamiz (aks holda reload'dan
+// keyin iframe kech render bo'lganda "captcha yo'q" deb noto'g'ri xulosa chiqadi).
 const WIDGET_PRESENT =
-  '.cf-turnstile, iframe[src*="challenges.cloudflare.com"]';
-const WIDGET_OR_INPUT = `${TOKEN_INPUT}, [id^="cf-chl-widget"]`;
+  '.cf-turnstile, iframe[src*="challenges.cloudflare.com"], #widgetId, [appcloudflarerecaptcha], app-cloudflare-captcha-container';
+const WIDGET_OR_INPUT = `${TOKEN_INPUT}, [id^="cf-chl-widget"], #widgetId, [appcloudflarerecaptcha], app-cloudflare-captcha-container`;
 
 /**
  * Turnstile token (cf-turnstile-response) to'lганmi? Haqiqiy tokenlar 300+ belgi,
@@ -242,6 +247,22 @@ export async function clickTurnstile(
   if (osClickEnabled()) {
     step?.("OS-klik yo'li (enabled)");
     if (await osClickTurnstile(page, step)) return true;
+    // OS-klik token bermadi. VFS Turnstile iframe'ni SHADOW DOM ichiga
+    // joylashtiradi — pastdagi CDP frameLocator/koordinata zaxirasi unga
+    // YETMAYDI (frameLocator shadow DOM'ni ko'rmaydi) va yana ~16s isrof qiladi.
+    // Shuning uchun OS-klik rejimida CDP zaxirani O'TKAZIB YUBORAMIZ va darrov
+    // chiqamiz — chaqiruvchi (login.ts) sahifani QAYTA YUKLAB toza widget bilan
+    // urinadi (tezroq + ishonchliroq). Eski xulqni tiklash: env bilan yoqiladi.
+    const cdpFallback =
+      (process.env.BOOKING_TURNSTILE_CDP_FALLBACK || "")
+        .trim()
+        .toLowerCase() === "true";
+    if (!cdpFallback) {
+      step?.(
+        "OS-klik token bermadi → qayta yuklash kerak (CDP zaxira o'tkazildi)",
+      );
+      return false;
+    }
     step?.("OS-klik token bermadi → CDP zaxira");
     // OS klik o'tmadi — pastdagi CDP usuliga tushamiz (zaxira).
   } else {
@@ -349,68 +370,118 @@ export async function osClickTurnstile(
 
   const pid = getLastChromePid();
 
-  // Checkbox koordinatasi tayyor bo'lguncha kutamiz — widget kech render bo'ladi
-  // (ayniqsa dropdownlardan keyingi "Verify Captcha" modali iframe'ni biroz
-  // kechroq chizadi). MUHIM: kutish davomida har gal TOKEN kelganini ham
-  // tekshiramiz — managed/"Verifying..." Turnstile o'zi (auto) tugashi mumkin,
-  // unda klik SHART EMAS, darrov true qaytaramiz (sekin CDP zaxiraga tushmaymiz).
-  const measureMs = Number(process.env.BOOKING_CAPTCHA_MEASURE_MS || "8000");
-  const tMeasure = Date.now();
-  let coord: { physX: number; physY: number } | null = null;
-  const measureDeadline = Date.now() + measureMs;
-  while (Date.now() < measureDeadline) {
-    if (await hasTurnstileToken(page)) {
-      step?.(
-        `osClick: token o'lchash paytida keldi (auto) +${((Date.now() - tMeasure) / 1000).toFixed(1)}s`,
-      );
-      return true;
-    }
-    coord = await measureTurnstilePhysical(page);
-    if (coord) break;
-    await page.waitForTimeout(500).catch(() => {});
-  }
-  if (!coord) {
-    step?.(
-      `osClick: o'lchov MUVAFFAQIYATSIZ +${((Date.now() - tMeasure) / 1000).toFixed(1)}s (iframe topilmadi)`,
-    );
-    return false;
-  }
-  step?.(`o'lchov tayyor +${((Date.now() - tMeasure) / 1000).toFixed(1)}s`);
+  // ── Cloudflare "Verifying..." kuzatuvchisi ─────────────────────────────────
+  // Checkbox bosilgach Cloudflare challenges.cloudflare.com'ga POST qilib
+  // TEKSHIRADI (odatda ~10-20s). AYNAN shu paytda QAYTA bossak — challenge
+  // RESET bo'ladi va tekshiruv boshidan boshlanadi (mana shu 30s ni cho'zadi).
+  // Shuning uchun CF tarmoq faolligini kuzatamiz: CF "band" bo'lsa qayta klik
+  // QILMAYMIZ — faqat token kelishini kutamiz. Klik faqat CF JIM bo'lsa
+  // (= klik tegmagan) takrorlanadi.
+  let lastCfActivity = 0;
+  const onCfReq = (r: Request) => {
+    if (r.url().includes("challenges.cloudflare.com"))
+      lastCfActivity = Date.now();
+  };
+  page.on("request", onCfReq);
+  page.on("requestfinished", onCfReq);
 
-  for (let t = 0; t < 3; t++) {
-    // 1-urinishda yuqoridagi measureWithRetry koordinatasini ishlatamiz (qayta
-    // o'lchamaymiz — vaqt tejaymiz). 2-urinishdan qayta o'lchaymiz (klik tegmagan
-    // bo'lsa widget biroz siljigan bo'lishi mumkin).
-    if (t > 0) {
-      const cFresh = await measureTurnstilePhysical(page);
-      if (cFresh) coord = cFresh;
-    }
+  // BITTA BYUDJET: o'lchov + klik + token kutish — hammasi shu vaqt ichida.
+  // Widget KECH render bo'ladi (Angular SPA), shuning uchun iframe chiqquncha
+  // KUTAMIZ (8s emas — measureCapMs gacha), chiqishi bilan OS-klik DARROV bosadi.
+  // Token kutish davomida ham tekshiriladi (auto-pass / "Verifying..." o'zi
+  // tugashi mumkin — unda klik shart emas).
+  const solveMs = Number(process.env.BOOKING_CAPTCHA_TIMEOUT_MS || "30000");
+  // iframe chiqishini qancha kutamiz (o'tsa CDP zaxiraga tushamiz). Kech render
+  // bo'lgani uchun 8s kam edi — 18s beramiz.
+  const measureCapMs = Number(
+    process.env.BOOKING_CAPTCHA_MEASURE_MS || "18000",
+  );
+  const tStart = Date.now();
+  const deadline = tStart + solveMs;
+  const el = (t: number) => ((Date.now() - t) / 1000).toFixed(1);
 
-    // osClickAt kompilyatsiya qilingan KICHIK .exe ni chaqiradi (VfsOsClick.exe)
-    // — u oynani o'zi ENG USTGA ko'taradi (AttachThreadInput + SetWindowPos) va
-    // kursorni inson kabi ko'chirib bosadi. powershell.exe YO'Q => ~0.5s (cache'da).
-    const tClick = Date.now();
-    await osClickAt(coord.physX, coord.physY, pid, script);
-    step?.(
-      `OS-klik #${t + 1} (${((Date.now() - tClick) / 1000).toFixed(1)}s) — token kutilmoqda...`,
-    );
+  try {
+    let coord: { physX: number; physY: number } | null = null;
+    let clicks = 0;
+    const maxClicks = 3;
+    let lastClickAt = 0;
+    let skipLogged = false;
+    let waitLogged = false;
 
-    // HAQIQIY klikdan keyin token ~2-4s da keladi. Kelmasa — klik tegmagandir,
-    // uzoq kutmaymiz: qayta o'lchab qayta bosamiz.
-    for (let w = 0; w < 14; w++) {
-      await page.waitForTimeout(400).catch(() => {});
+    while (Date.now() < deadline) {
+      // Auto-pass / klikdan keyingi token — eng birinchi tekshiramiz.
       if (await hasTurnstileToken(page)) {
-        step?.(
-          `token keldi (urinish ${t + 1}, +${((Date.now() - tClick) / 1000).toFixed(1)}s)`,
-        );
+        step?.(`token keldi (${clicks} klik, +${el(tStart)}s)`);
         return true;
       }
+
+      // 1) Hali o'lchanmagan — iframe render bo'lishini KUTAMIZ.
+      if (!coord) {
+        coord = await measureTurnstilePhysical(page);
+        if (!coord) {
+          // Iframe juda uzoq chiqmadi — CDP zaxiraga yo'l beramiz.
+          if (Date.now() - tStart > measureCapMs) {
+            step?.(`iframe chiqmadi +${el(tStart)}s — CDP zaxiraga`);
+            return false;
+          }
+          if (!waitLogged) {
+            step?.("iframe kutilmoqda (kech render)...");
+            waitLogged = true;
+          }
+          await page.waitForTimeout(400).catch(() => {});
+          continue;
+        }
+        step?.(`o'lchov tayyor +${el(tStart)}s — bosilmoqda`);
+      }
+
+      // 2) O'lchandi — CF-ni hurmat qilib bosamiz.
+      const cfBusy = Date.now() - lastCfActivity < 2500;
+      const sinceClick = Date.now() - lastClickAt;
+      // 1-klik DARROV. Keyingilarni FAQAT: oldingi klikdan >5s o'tgan + CF JIM
+      // (tekshirmayapti = klik tegmagan bo'lishi mumkin) + limit tugamagan bo'lsa.
+      const shouldClick =
+        clicks === 0 || (clicks < maxClicks && sinceClick > 5000 && !cfBusy);
+
+      if (shouldClick) {
+        if (clicks > 0) {
+          // Klik tegmagan — widget siljigan bo'lishi mumkin, qayta o'lchaymiz.
+          const cFresh = await measureTurnstilePhysical(page);
+          if (cFresh) coord = cFresh;
+          skipLogged = false;
+        }
+        // osClickAt kichik .exe (VfsOsClick.exe) — oynani ustga ko'taradi va
+        // kursorni inson kabi ko'chirib bosadi (~0.5s, powershell.exe YO'Q).
+        await osClickAt(coord.physX, coord.physY, pid, script);
+        clicks += 1;
+        lastClickAt = Date.now();
+        step?.(
+          `OS-klik #${clicks} yuborildi (+${el(tStart)}s) — kutilmoqda...`,
+        );
+      } else if (cfBusy && clicks > 0 && !skipLogged) {
+        skipLogged = true;
+        step?.(
+          `CF tekshirmoqda — qayta klik o'tkazib yuborildi (+${el(tStart)}s)`,
+        );
+      }
+
+      // TEZ CHIQISH: barcha kliklar qilindi, CF endi tekshirmayapti (jim) va
+      // oxirgi klikdan ham >6s o'tdi — token KELMAYDI (VFS Turnstile rad etdi).
+      // To'liq 30s kutib o'tirmaymiz — DARROV chiqib chaqiruvchiga reload imkonini
+      // beramiz (login.ts sahifani qayta yuklab toza widget bilan urinadi).
+      if (clicks >= maxClicks && !cfBusy && Date.now() - lastClickAt > 6000) {
+        step?.(`token kelmadi — CF jim, qayta yuklash kerak (+${el(tStart)}s)`);
+        return false;
+      }
+
+      await page.waitForTimeout(400).catch(() => {});
     }
-    step?.(
-      `urinish ${t + 1}: token kelmadi (+${((Date.now() - tClick) / 1000).toFixed(1)}s)`,
-    );
+
+    step?.(`token kelmadi (${clicks} klik, +${el(tStart)}s)`);
+    return false;
+  } finally {
+    page.off("request", onCfReq);
+    page.off("requestfinished", onCfReq);
   }
-  return false;
 }
 
 /**
@@ -778,9 +849,27 @@ async function measureTurnstilePhysical(
       // 2) Iframe topilmadi — KONTEYNER (light DOM) bo'yicha. Checkbox widget
       //    chap chetida ~28px, YUQORIDAN ~32px (test sitekey'da pastda qizil
       //    banner bo'lsa height/2 pastga tushib ketadi — fiks ofset ishonchli).
-      const box = document.querySelector(
-        '.cf-turnstile, [id^="cf-chl-widget"]',
-      ) as HTMLElement | null;
+      //    MUHIM: VFS'da `.cf-turnstile` klassi YO'Q — Cloudflare'ni
+      //    <div id="widgetId"> / <app-cloudflare-captcha-container> /
+      //    [appcloudflarerecaptcha] ichiga render qiladi. `[id^=cf-chl-widget]`
+      //    esa YASHIRIN input (..._response, 0-size) ga tegadi — uni TASHLAYMIZ.
+      //    O'lchami bor (width>0 && height>0) BIRINCHI konteynerni olamiz.
+      const boxSels = [
+        ".cf-turnstile",
+        "[appcloudflarerecaptcha]",
+        "app-cloudflare-captcha-container",
+        "#widgetId",
+      ];
+      let box: HTMLElement | null = null;
+      for (let i = 0; i < boxSels.length; i++) {
+        const cand = document.querySelector(boxSels[i]) as HTMLElement | null;
+        if (!cand) continue;
+        const rr = cand.getBoundingClientRect();
+        if (rr.width > 0 && rr.height > 0) {
+          box = cand;
+          break;
+        }
+      }
       if (box) {
         box.scrollIntoView({ block: "center", behavior: "instant" as never });
         const r = box.getBoundingClientRect();
