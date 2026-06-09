@@ -254,6 +254,7 @@ export async function applyResourceBlocking(
 async function applyStealthInit(
   context: import("playwright").BrowserContext,
   acceptLanguage: string,
+  profileKey?: string | null,
 ): Promise<void> {
   const langs = acceptLanguage
     .split(",")
@@ -290,6 +291,8 @@ async function applyStealthInit(
     .catch(() => {});
   // WebRTC IP leak himoyasi (JS qatlami) — alohida init-script.
   await applyWebrtcGuard(context);
+  // Apparat fingerprint: WebGL renderer + CPU yadrolari + RAM (server izini yashirish).
+  await applyHardwareSpoof(context, profileKey);
 }
 
 // WEBRTC IP LEAK (JS qatlami) — Chrome bayrog'i (webrtcLeakArgs) ustiga ikkinchi
@@ -313,7 +316,14 @@ async function applyWebrtcGuard(
           (window as any).webkitRTCPeerConnection ||
           (window as any).mozRTCPeerConnection;
         if (!RTC) return;
-        const Patched: any = function (this: any, ...rtcArgs: any[]) {
+        // __name gotcha'dan qochish: `const Patched = function` EMAS (esbuild/tsx
+        // uni __name() bilan o'raydi -> browserda ReferenceError -> guard jim o'ladi).
+        // O'RNIGA anonim funksiyani TO'G'RIDAN-TO'G'RI window member'iga tayinlaymiz
+        // (member-assignment'ga esbuild named-eval/__name qo'shmaydi).
+        (window as any).RTCPeerConnection = function (
+          this: any,
+          ...rtcArgs: any[]
+        ) {
           const pc = new RTC(...rtcArgs);
           const origAdd = pc.addEventListener?.bind(pc);
           if (origAdd) {
@@ -341,13 +351,78 @@ async function applyWebrtcGuard(
           }
           return pc;
         };
-        Patched.prototype = RTC.prototype;
-        (window as any).RTCPeerConnection = Patched;
-        (window as any).webkitRTCPeerConnection = Patched;
+        (window as any).RTCPeerConnection.prototype = RTC.prototype;
+        (window as any).webkitRTCPeerConnection = (
+          window as any
+        ).RTCPeerConnection;
       } catch {
         /* ignore */
       }
     })
+    .catch(() => {});
+}
+
+// APPARAT FINGERPRINT (server izini yashirish) — WebGL renderer + CPU + RAM.
+// Server (Docker/Xvfb)da Chrome WebGL'da "Google SwiftShader" / "llvmpipe"
+// qaytaradi — bu "men data-markaz/serverman" degan KUCHLI signal. Bu yerda real
+// Windows GPU (UA'dagi Windows bilan MOS) ko'rsatamiz. navigator.hardwareConcurrency
+// (CPU yadrolari) va deviceMemory (RAM) ham uy kompyuteri qiymatlariga moslanadi
+// (server odatda ko'p yadroli). Har profileKey o'z qiymatini BARQAROR oladi.
+// .env: BOOKING_HW_SPOOF=false bo'lsa butunlay o'chadi.
+async function applyHardwareSpoof(
+  context: import("playwright").BrowserContext,
+  profileKey?: string | null,
+): Promise<void> {
+  if ((process.env.BOOKING_HW_SPOOF || "").trim().toLowerCase() === "false") {
+    return;
+  }
+  const hw = hardwareFp(profileKey);
+  await context
+    .addInitScript(
+      (data: {
+        vendor: string;
+        renderer: string;
+        cores: number;
+        memory: number;
+      }) => {
+        try {
+          if (data.cores > 0) {
+            Object.defineProperty(navigator, "hardwareConcurrency", {
+              get: () => data.cores,
+              configurable: true,
+            });
+          }
+          if (data.memory > 0) {
+            Object.defineProperty(navigator, "deviceMemory", {
+              get: () => data.memory,
+              configurable: true,
+            });
+          }
+          // WebGL UNMASKED_VENDOR_WEBGL=37445, UNMASKED_RENDERER_WEBGL=37446.
+          // Ikkala kontekst prototipida ham getParameter'ni almashtiramiz.
+          // __name gotcha'dan qochish: member-assignment'ga anonim `function`
+          // (NE `const x = function`) + this'ni saqlash uchun arrow EMAS.
+          const protos: any[] = [
+            (window as any).WebGLRenderingContext &&
+              (window as any).WebGLRenderingContext.prototype,
+            (window as any).WebGL2RenderingContext &&
+              (window as any).WebGL2RenderingContext.prototype,
+          ];
+          for (const proto of protos) {
+            if (!proto || !proto.getParameter) continue;
+            const orig = proto.getParameter;
+            proto.getParameter = function (this: any, p: number) {
+              if (p === 37445) return data.vendor;
+              if (p === 37446) return data.renderer;
+              return orig.call(this, p);
+            };
+          }
+        } catch {
+          /* ignore */
+        }
+      },
+      hw,
+    )
     .catch(() => {});
 }
 
@@ -382,6 +457,52 @@ function fpHash(key: string): number {
     h = Math.imul(h, 16777619);
   }
   return h >>> 0;
+}
+
+// Apparat fingerprint pool'lari: REAL Windows GPU (ANGLE/D3D11 renderer string),
+// keng tarqalgan CPU yadrolari va RAM. Har profileKey shulardan BIRINI barqaror
+// tanlaydi. .env override: BOOKING_WEBGL_VENDOR / BOOKING_WEBGL_RENDERER /
+// BOOKING_HW_CORES / BOOKING_HW_MEMORY.
+type HwFp = { vendor: string; renderer: string; cores: number; memory: number };
+const GPU_POOL: Array<{ vendor: string; renderer: string }> = [
+  {
+    vendor: "Google Inc. (Intel)",
+    renderer:
+      "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  },
+  {
+    vendor: "Google Inc. (Intel)",
+    renderer:
+      "ANGLE (Intel, Intel(R) HD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  },
+  {
+    vendor: "Google Inc. (NVIDIA)",
+    renderer:
+      "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  },
+  {
+    vendor: "Google Inc. (AMD)",
+    renderer:
+      "ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  },
+];
+// deviceMemory spetsifikatsiya bo'yicha faqat 4/8 kabi qiymatlar (max 8).
+const CORES_POOL = [4, 8, 8, 12, 16];
+const MEM_POOL = [8, 8, 4, 8];
+
+// profileKey'dan barqaror apparat fingerprint (vendor/renderer/cores/memory).
+function hardwareFp(profileKey?: string | null): HwFp {
+  const key = (profileKey || "").trim().toLowerCase();
+  const h = key ? fpHash(key) : 0;
+  const gpu = GPU_POOL[h % GPU_POOL.length];
+  const cores = CORES_POOL[(h >>> 4) % CORES_POOL.length];
+  const memory = MEM_POOL[(h >>> 8) % MEM_POOL.length];
+  return {
+    vendor: (process.env.BOOKING_WEBGL_VENDOR || gpu.vendor).trim(),
+    renderer: (process.env.BOOKING_WEBGL_RENDERER || gpu.renderer).trim(),
+    cores: Number(process.env.BOOKING_HW_CORES || cores) || cores,
+    memory: Number(process.env.BOOKING_HW_MEMORY || memory) || memory,
+  };
 }
 
 // Proxy davlatiga mos timezone + til (Accept-Language). Exit IP qaysi davlatda
@@ -945,7 +1066,15 @@ export async function openBrowserContext(
       cdpProfileBase: cdpOpts?.cdpProfileBase,
       cdpFreshProfile: cdpOpts?.cdpFreshProfile,
     });
-    if (real) return real;
+    if (real) {
+      // CDP yo'lida ham apparat fingerprint (WebGL/CPU/RAM) spoof — server izini
+      // yashirish uchun (Docker/Xvfb'da WebGL "SwiftShader" beradi). WebRTC guard
+      // connectRealChrome ichida qo'shilgan. navigator.languages'ni CDP'da
+      // O'ZGARTIRMAYMIZ — real Chrome HTTP Accept-Language header bilan
+      // nomuvofiqlik bo'lmasin; WebGL/CPU/RAM spoof esa header'siz, xavfsiz.
+      await applyHardwareSpoof(real.context, proxyTarget?.profileKey ?? null);
+      return real;
+    }
     // CDP muvaffaqiyatsiz bo'lsa — oddiy rejimga tushamiz (pastda).
   }
 
@@ -992,7 +1121,11 @@ export async function openBrowserContext(
       locale: fp.locale,
       extraHTTPHeaders: fp.extraHTTPHeaders,
     });
-    await applyStealthInit(context, fp.extraHTTPHeaders["Accept-Language"]);
+    await applyStealthInit(
+      context,
+      fp.extraHTTPHeaders["Accept-Language"],
+      proxyTarget?.profileKey ?? null,
+    );
     return {
       context,
       close: async () => {
@@ -1017,7 +1150,11 @@ export async function openBrowserContext(
       deviceScaleFactor: fp.deviceScaleFactor,
       extraHTTPHeaders: fp.extraHTTPHeaders,
     });
-    await applyStealthInit(context, fp.extraHTTPHeaders["Accept-Language"]);
+    await applyStealthInit(
+      context,
+      fp.extraHTTPHeaders["Accept-Language"],
+      proxyTarget?.profileKey ?? null,
+    );
     return {
       context,
       close: async () => context.close(),
@@ -1038,7 +1175,11 @@ export async function openBrowserContext(
     deviceScaleFactor: fp.deviceScaleFactor,
     extraHTTPHeaders: fp.extraHTTPHeaders,
   });
-  await applyStealthInit(context, fp.extraHTTPHeaders["Accept-Language"]);
+  await applyStealthInit(
+    context,
+    fp.extraHTTPHeaders["Accept-Language"],
+    proxyTarget?.profileKey ?? null,
+  );
   return {
     context,
     close: async () => browser.close(),
