@@ -78,6 +78,13 @@ export async function setActive(id: number, active: boolean) {
   return prisma.worker.update({ where: { id }, data: { active } });
 }
 
+// Bitta workerni butunlay o'chiradi (ro'yxatdan olib tashlaydi).
+// Eslatma: o'chirilgandan keyin tartib raqamlari "teshik"li bo'lishi mumkin
+// (masalan worker-05 o'chsa, qolganlar qayta raqamlanmaydi) — bu normal.
+export async function deleteWorker(id: number) {
+  return prisma.worker.delete({ where: { id } });
+}
+
 // Tartib bo'yicha birinchi N tasini active qiladi, qolganini o'chiradi.
 // Masalan setActiveCount(8) => worker-01..08 active, qolgani off.
 export async function setActiveCount(n: number) {

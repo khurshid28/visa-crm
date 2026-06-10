@@ -13,6 +13,7 @@ import {
 import SidebarNav from "@/components/SidebarNav";
 import ThemeToggle from "@/components/ThemeToggle";
 import LogoutButton from "@/components/LogoutButton";
+import HighCpuBanner from "@/components/HighCpuBanner";
 
 export default function AppShell({
   username,
@@ -211,6 +212,7 @@ export default function AppShell({
 
         <main className="min-w-0 flex-1 overflow-x-hidden">
           <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-6 lg:p-8">
+            <HighCpuBanner />
             {children}
           </div>
         </main>

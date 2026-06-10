@@ -10,6 +10,7 @@ import {
   DocumentText,
   Calendar,
   Ticket,
+  Box,
 } from "iconsax-react";
 
 const LINKS = [
@@ -19,6 +20,7 @@ const LINKS = [
   { href: "/users", label: "Userlar", icon: People },
   { href: "/documents", label: "Hujjatlar", icon: DocumentText },
   { href: "/monitoring", label: "Monitoring", icon: Chart },
+  { href: "/workers", label: "Workerlar", icon: Box },
 ];
 
 // Eng pastda turadigan havola(lar).

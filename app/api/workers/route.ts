@@ -7,6 +7,7 @@ import {
   setActive,
   setActiveCount,
   addWorkers,
+  deleteWorker,
   cpuAdvice,
   isStale,
 } from "@/lib/workers";
@@ -99,6 +100,13 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Noto'g'ri id" }, { status: 400 });
       }
       await setActive(value, false).catch(() => {});
+      break;
+    }
+    case "delete": {
+      if (!Number.isFinite(value)) {
+        return NextResponse.json({ error: "Noto'g'ri id" }, { status: 400 });
+      }
+      await deleteWorker(value).catch(() => {});
       break;
     }
     default:

@@ -5,9 +5,11 @@ import {
   Refresh,
   Cpu,
   Add,
+  AddCircle,
   Flash,
   Warning2,
   Box,
+  Trash,
 } from "iconsax-react";
 import { useToast } from "@/components/Toast";
 
@@ -115,6 +117,20 @@ export default function WorkersPanel() {
     [toast],
   );
 
+  // Bitta workerni o'chirish (tasdiq bilan).
+  const delWorker = useCallback(
+    (w: WorkerRow) => {
+      if (
+        window.confirm(
+          `${w.name} o'chirilsinmi? Bu workerni ro'yxatdan butunlay olib tashlaydi.`,
+        )
+      ) {
+        act("delete", w.id);
+      }
+    },
+    [act],
+  );
+
   const cpu = data?.cpu;
   const workers = data?.workers ?? [];
   const liveCount = workers.filter((w) => w.live).length;
@@ -217,51 +233,83 @@ export default function WorkersPanel() {
           >
             <Add size={16} /> Qo'shish
           </button>
+          <button
+            onClick={() => act("add", 1)}
+            disabled={busy}
+            title="Bittadan qo'shish"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-indigo-500/10"
+          >
+            <AddCircle size={16} variant="Bold" /> +1
+          </button>
         </div>
       </div>
 
       {/* Worker ro'yxati */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {workers.map((w) => (
-          <button
+          <div
             key={w.id}
-            onClick={() => act(w.active ? "disable" : "enable", w.id)}
-            disabled={busy}
-            title={
-              w.lastError
-                ? `Xato: ${w.lastError}`
-                : w.currentJob || statusLabel(w)
-            }
-            className={`flex flex-col gap-1 rounded-xl border p-2.5 text-left transition disabled:opacity-60 ${
+            className={`flex flex-col gap-1 rounded-xl border p-2.5 text-left transition ${
               w.active
-                ? "border-slate-200 bg-white hover:border-indigo-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-indigo-500/50"
+                ? "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
                 : "border-dashed border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-800/40"
             }`}
           >
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <span className={`h-2 w-2 rounded-full ${dotClass(w)}`} />
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+            <div className="flex items-center justify-between gap-1">
+              <button
+                onClick={() => act(w.active ? "disable" : "enable", w.id)}
+                disabled={busy}
+                title={w.active ? "O'chirish (disable)" : "Yoqish (enable)"}
+                className="flex min-w-0 items-center gap-1.5 disabled:opacity-60"
+              >
+                <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass(w)}`} />
+                <span className="truncate text-xs font-semibold text-slate-700 dark:text-slate-200">
                   {w.name}
                 </span>
-              </span>
-              <span className="text-[10px] text-slate-400">#{w.id}</span>
+              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                <span className="text-[10px] text-slate-400">#{w.id}</span>
+                <button
+                  onClick={() => delWorker(w)}
+                  disabled={busy}
+                  title="Workerni o'chirish (delete)"
+                  className="rounded p-0.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50 dark:hover:bg-rose-500/10"
+                >
+                  <Trash size={13} />
+                </button>
+              </div>
             </div>
             <div className="flex items-center justify-between text-[11px] text-slate-400">
               <span>{statusLabel(w)}</span>
               <span>{w.jobsDone} ish</span>
             </div>
-            {w.currentJob && (
-              <div className="truncate text-[10px] text-amber-600 dark:text-amber-400">
+            {w.currentJob ? (
+              <div
+                className="truncate text-[10px] text-amber-600 dark:text-amber-400"
+                title={w.currentJob}
+              >
                 {w.currentJob}
               </div>
+            ) : (
+              <div className="text-[10px] text-slate-400">
+                {w.pid ? `PID: ${w.pid}` : "ish yo'q"}
+              </div>
             )}
-          </button>
+            {w.lastError && (
+              <div
+                className="truncate text-[10px] text-rose-500"
+                title={w.lastError}
+              >
+                xato: {w.lastError}
+              </div>
+            )}
+          </div>
         ))}
       </div>
 
       <p className="mt-3 text-[11px] text-slate-400">
-        Worker ustiga bosib yoqish/o'chirish mumkin. Ishga tushirish:{" "}
+        Nom ustiga bosib yoqish/o'chirish, savatchada o'chirish (delete) mumkin.
+        Ish yo'q bo'lsa PID ko'rinadi. Ishga tushirish:{" "}
         <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">
           npm run workers:run
         </code>
