@@ -162,11 +162,10 @@ export default function GroupDetail({ group }: { group: Group }) {
         return;
       }
 
-      if (data.ok) {
-        toast("Arizachi ro'yxatdan o'tkazildi");
+      if (data.queued) {
+        toast("Ro'yxatga olish navbatga qo'shildi (worker bajaradi)");
       } else {
-        const note = data.automation?.note || "Avtomatlashtirish xatosi";
-        toast(`Xato: ${note}`, "error");
+        toast(data.note || "Navbatga qo'shilmadi", "error");
       }
       router.refresh();
     } catch {
