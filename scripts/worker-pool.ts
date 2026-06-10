@@ -8,6 +8,7 @@ import {
 } from "../lib/order-queue";
 import { bookApplicant } from "../lib/booking";
 import { prisma } from "../lib/prisma";
+import { loadSettingsIntoEnv } from "../lib/settings";
 import {
   ensureSeed,
   activeWorkers,
@@ -90,6 +91,10 @@ function makeLaneHandler(worker: Worker) {
 }
 
 async function start() {
+  // 0) Sozlamalarni bazadan o'qib process.env'ga yuklaymiz (proxy/headless/
+  //    timeout'lar endi bazadan keladi). Birinchi marta .env'dan seed bo'ladi.
+  await loadSettingsIntoEnv(true);
+
   // 1) Bazada kamida default (10) ta worker borligini ta'minlaymiz.
   const total = await ensureSeed();
   // 2) Eski (osilib qolgan) holatlarni tozalaymiz.
@@ -141,6 +146,12 @@ async function start() {
       })
       .catch(() => {});
   }, 20000);
+
+  // 6) Har 10 soniyada sozlamalarni qayta o'qiymiz — super-admin UI'dan
+  //    o'zgartirsa, ishlab turgan pool ham yangi qiymatlarni ko'radi.
+  setInterval(() => {
+    loadSettingsIntoEnv(true).catch(() => {});
+  }, 10000);
 
   // eslint-disable-next-line no-console
   console.log(

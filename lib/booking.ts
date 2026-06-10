@@ -27,6 +27,7 @@ import {
 } from "./telegram";
 import { logBookStep } from "./log";
 import { ensureProxyHealthy } from "./proxy";
+import { loadSettingsIntoEnv } from "./settings";
 
 // Yuklangan Excel/CSV fayllar saqlanadigan papka (loyiha ildizida).
 const IMPORTS_DIR = path.join(process.cwd(), "uploads", "imports");
@@ -153,6 +154,10 @@ async function runStageWithRetry(
   attempts: number;
   durationMs: number;
 }> {
+  // SOZLAMALAR: proksi/headless/timeout qiymatlari bazadan keladi. Har bosqich
+  // oldidan eng yangi sozlamani process.env'ga yuklaymiz (keshlangan, ~5s).
+  await loadSettingsIntoEnv();
+
   const limit = maxAttempts();
   const profileKey = applicant.generatedEmail || applicant.email || null;
   const input = toAutomationInput(applicant);

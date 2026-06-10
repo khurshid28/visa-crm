@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getQueueDepth } from "@/lib/order-queue";
 import { proxyHealthForApi } from "@/lib/proxy";
+import { loadSettingsIntoEnv } from "@/lib/settings";
 import {
   ensureSeed,
   listWorkers,
@@ -62,6 +63,9 @@ export async function GET(req: NextRequest) {
   if (name) {
     return NextResponse.json({ logs: await listWorkerLogs(name) });
   }
+  // Next.js jarayoni proksi sozlamasini bazadan yangilab tursin (proksi banner
+  // to'g'ri ko'rsatilishi uchun) — keshlangan, arzon.
+  await loadSettingsIntoEnv();
   await ensureSeed();
   return NextResponse.json(await snapshot());
 }

@@ -464,3 +464,38 @@ model Worker {
   @@index([active])
   @@index([status])
 }
+
+// Tizim sozlamalari — butun tizimga BITTA yozuv (singleton, id=1). Avval bu
+// qiymatlar faqat .env'da edi (PROXY_*, BOOKING_HEADLESS, timeout'lar...).
+// Endi BAZADA saqlanadi va super-admin "Sozlamalar" sahifasidan tahrirlanadi.
+// lib/settings.ts bu yozuvni o'qib process.env'ga yuklaydi (hydrate) — shu
+// sababli mavjud kod (proxy.ts, browser.ts, booking.ts) o'zgarmaydi, faqat
+// endi qiymatlar bazadan keladi. Birinchi marta yaratilganda joriy .env
+// qiymatlaridan to'ldiriladi (silliq ko'chish).
+model AppSettings {
+  id Int @id @default(1)
+
+  // --- Proksi (PROXY_*) ---
+  proxyEnabled   Boolean @default(false) // PROXY_ENABLED
+  proxyHost      String  @default("") // PROXY_HOST
+  proxyPort      String  @default("") // PROXY_PORT
+  proxyUser      String  @default("") // PROXY_USER
+  proxyPass      String  @default("") // PROXY_PASS (maxfiy — UI'da maskalanadi)
+  proxyCountries String  @default("uz,kz") // PROXY_COUNTRIES
+
+  // --- Chrome ko'rinishi ---
+  chromeHeadless Boolean @default(true) // BOOKING_HEADLESS: true=yashirin, false=ko'rinadi
+
+  // --- Timeout'lar / urinishlar ---
+  captchaTimeoutMs     Int @default(30000) // BOOKING_CAPTCHA_TIMEOUT_MS — Turnstile token kutish
+  cfChallengeTimeoutMs Int @default(45000) // BOOKING_CF_CHALLENGE_TIMEOUT_MS — Cloudflare challenge kutish
+  maxAttempts          Int @default(3) // ORDER_MAX_ATTEMPTS — bir bosqich uchun urinishlar
+  ipRetries            Int @default(4) // BOOKING_PROXY_IP_RETRIES — IP blok bo'lsa yangi IP urinishlari
+
+  // --- Worker'lar ---
+  workerPerCpu Int @default(2) // WORKER_PER_CPU — 1 yadroga to'g'ri keladigan worker
+
+  updatedAt DateTime @updatedAt
+  updatedBy String? // oxirgi tahrirlagan super-admin (username)
+}
+

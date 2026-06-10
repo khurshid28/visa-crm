@@ -11,6 +11,7 @@ import {
   Calendar,
   Ticket,
   Box,
+  Setting2,
 } from "iconsax-react";
 
 const LINKS = [
@@ -26,6 +27,7 @@ const LINKS = [
 // Eng pastda turadigan havola(lar).
 const BOTTOM_LINKS = [
   { href: "/tickets", label: "Tiketlar", icon: Ticket },
+  { href: "/settings", label: "Sozlamalar", icon: Setting2 },
 ];
 
 export default function SidebarNav({
