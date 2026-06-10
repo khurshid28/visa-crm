@@ -8,6 +8,7 @@ import { startCpuWatchdog, type CpuStat } from "../lib/cpu";
 import { startProxyWatchdog, type ProxyHealth } from "../lib/proxy";
 import { todayUsageGb } from "../lib/proxy-usage";
 import { broadcastMessage, isTelegramConfigured } from "../lib/telegram";
+import { loadSettingsIntoEnv } from "../lib/settings";
 
 // CPU watchdog — server yuklamasi 80% (chegara) dan oshsa adminlarga
 // Telegram orqali ogohlantiradi (spam bo'lmasligi uchun cooldown bilan).
@@ -47,34 +48,41 @@ function fmtProxyRecover(h: ProxyHealth): string {
   return `\u2705 <b>Proksi tiklandi</b>${ip}. Ishlar avtomatik davom etadi.`;
 }
 
-if (isTelegramConfigured()) {
-  startCpuWatchdog({
-    onAlert: async (s) => {
-      await broadcastMessage(fmtAlert(s)).catch(() => {});
-    },
-    onRecover: async (s) => {
-      await broadcastMessage(fmtRecover(s)).catch(() => {});
-    },
-  });
-  // eslint-disable-next-line no-console
-  console.log("[bot] CPU watchdog yoqildi (80% dan oshsa ogohlantiradi)");
+// Sozlamalar endi bazadan keladi (TELEGRAM_BOT_TOKEN, PROXY_* va h.k. .env da
+// comment qilingan). Shu sabab watchdog/polling boshlashdan oldin DB dan
+// env ga yuklab olamiz.
+(async () => {
+  await loadSettingsIntoEnv(true);
 
-  startProxyWatchdog({
-    onAlert: async (h) => {
-      const todayGb = await todayUsageGb().catch(() => 0);
-      await broadcastMessage(fmtProxyAlert(h, todayGb)).catch(() => {});
-    },
-    onRecover: async (h) => {
-      await broadcastMessage(fmtProxyRecover(h)).catch(() => {});
-    },
-  });
-  // eslint-disable-next-line no-console
-  console.log(
-    "[bot] Proksi watchdog yoqildi (402/o'lim holatida ogohlantiradi)",
-  );
-}
+  if (isTelegramConfigured()) {
+    startCpuWatchdog({
+      onAlert: async (s) => {
+        await broadcastMessage(fmtAlert(s)).catch(() => {});
+      },
+      onRecover: async (s) => {
+        await broadcastMessage(fmtRecover(s)).catch(() => {});
+      },
+    });
+    // eslint-disable-next-line no-console
+    console.log("[bot] CPU watchdog yoqildi (80% dan oshsa ogohlantiradi)");
 
-runBotPolling().catch((e) => {
+    startProxyWatchdog({
+      onAlert: async (h) => {
+        const todayGb = await todayUsageGb().catch(() => 0);
+        await broadcastMessage(fmtProxyAlert(h, todayGb)).catch(() => {});
+      },
+      onRecover: async (h) => {
+        await broadcastMessage(fmtProxyRecover(h)).catch(() => {});
+      },
+    });
+    // eslint-disable-next-line no-console
+    console.log(
+      "[bot] Proksi watchdog yoqildi (402/o'lim holatida ogohlantiradi)",
+    );
+  }
+
+  await runBotPolling();
+})().catch((e) => {
   // eslint-disable-next-line no-console
   console.error("Bot to'xtadi:", e);
   process.exit(1);

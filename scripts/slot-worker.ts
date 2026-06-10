@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma";
 import { runSlotTick } from "../lib/slots";
 import { setWorkerHeartbeat } from "../lib/order-queue";
 import { isProxyEnabled } from "../lib/proxy";
+import { loadSettingsIntoEnv } from "../lib/settings";
 
 // ====================================================================
 //  SLOT-WORKER — kalendar monitoring job (alohida modul)
@@ -90,6 +91,9 @@ async function runCycle(): Promise<void> {
 }
 
 async function loop(): Promise<void> {
+  // Sozlamalar endi bazadan keladi (SLOT_MONITOR_*, kalendar, PROXY_* va h.k.
+  // .env da comment qilingan) — sikl boshlanishidan oldin env ga yuklaymiz.
+  await loadSettingsIntoEnv(true);
   log(`started — interval ${Math.round(INTERVAL_MS / 1000)}s`);
   // Idle heartbeat (bo'sh turganda ham monitoringda ko'rinsin).
   const hb = setInterval(() => heartbeat("idle"), 20_000);

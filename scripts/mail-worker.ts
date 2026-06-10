@@ -5,6 +5,7 @@ import { runActivation } from "../lib/automation";
 import { toAutomationInput } from "../lib/booking";
 import { setWorkerHeartbeat } from "../lib/order-queue";
 import { isMailListenerEnabled, getImapConfig } from "../lib/mail-listener";
+import { loadSettingsIntoEnv } from "../lib/settings";
 
 // ====================================================================
 //  MAIL-WORKER — gmail aktivatsiya listener (alohida microservice)
@@ -217,6 +218,9 @@ async function runCycle(): Promise<void> {
 }
 
 async function loop(): Promise<void> {
+  // Sozlamalar endi bazadan keladi (IMAP_*, ACTIVATION_* va h.k. .env da
+  // comment qilingan) — getImapConfig dan oldin env ga yuklaymiz.
+  await loadSettingsIntoEnv(true);
   const cfg = getImapConfig();
   log(
     `started — interval ${Math.round(INTERVAL_MS / 1000)}s, stale ${STALE_MIN}m, ` +
