@@ -14,6 +14,31 @@ import {
 } from "./telegram";
 import * as fs from "fs";
 
+// ===========================================================================
+//  KO'P SLOTLI TEKSHIRUV — bir vaqtda 2-3 slot monitoring qilinganda Chrome
+//  ust-ustiga ochilmasligi uchun nazorat (concurrency control).
+//
+//  Muammo: client har 5 soniyada har bir faol slot uchun "tick" yuboradi, lekin
+//  bitta tekshiruv (detectCalendar => haqiqiy Chrome) 15-20 soniya davom etadi.
+//  Nazoratsiz holatda: (a) bitta slot uchun oldingisi tugamasdan yangi Chrome
+//  ochiladi; (b) 3 ta faol slot bir paytda 3 ta Chrome ochib, CPU/proksini
+//  bo'g'adi. Quyidagi ikki himoya buni bartaraf etadi:
+//   1) checkingSlots — bitta slot bir vaqtda faqat BITTA Chrome ochadi (qayta
+//      kirishni bloklaydi). Tugamaguncha yangi tick "davom etmoqda" deydi.
+//   2) activeChecks  — global bir vaqtdagi tekshiruvlar soni cheklanadi
+//      (SLOT_CHECK_CONCURRENCY, default 1 = ketma-ket). Ortiqchasi "navbatda".
+//
+//  Eslatma: bu in-memory (jarayon ichida) himoya — client polling barchasi
+//  bitta Next jarayonida bajariladi, shuning uchun yetarli. (slot-worker.ts
+//  alohida jarayon bo'lsa, u kamdan-kam, ~10 daqiqada bir marta tekshiradi.)
+// ===========================================================================
+const checkingSlots = new Set<number>();
+const SLOT_CHECK_CONCURRENCY = Math.max(
+  1,
+  Math.floor(Number(process.env.SLOT_CHECK_CONCURRENCY || 1)),
+);
+let activeChecks = 0;
+
 export type SlotDirection = {
   fromCountry: string;
   toCountry: string;
@@ -468,12 +493,41 @@ export async function runSlotTick(
 
   // Slotni tekshiramiz — kalendar sahifasini ochib, bo'sh kun bor-yo'qligini
   // aniqlaymiz. Proxy yoqilgan bo'lsa rotating IP orqali o'tadi.
-  const cal = await detectCalendar({
-    slotId: id,
-    centre: current.centre,
-    category: current.category,
-    subCategory: current.subCategory,
-  });
+  //
+  // KO'P SLOTLI HIMOYA (ko'pincha bir vaqtda 2-3 slot faol):
+  //  1) shu slot allaqachon tekshirilmoqda bo'lsa — yangi Chrome ochmaymiz.
+  if (checkingSlots.has(id)) {
+    const slot = await patchSlot(id, {
+      lastCheckAt: now,
+      lastMessage: "Tekshiruv davom etmoqda (oldingisi hali tugamadi)",
+    });
+    return { slot, checked: false, slotOpen: false, message: slot.lastMessage };
+  }
+  //  2) global bir vaqtdagi tekshiruvlar chegarasi to'lgan bo'lsa — navbatda
+  //     kutadi (keyingi tick'da yana uriniladi). Chrome'lar bo'g'ilmaydi.
+  if (activeChecks >= SLOT_CHECK_CONCURRENCY) {
+    const slot = await patchSlot(id, {
+      lastCheckAt: now,
+      lastMessage: "Navbatda: boshqa slot tekshirilmoqda",
+    });
+    return { slot, checked: false, slotOpen: false, message: slot.lastMessage };
+  }
+
+  // Qulflab tekshiramiz (faqat Chrome ochiq turgan vaqt qulflanadi).
+  checkingSlots.add(id);
+  activeChecks++;
+  let cal: CalendarDetectResult;
+  try {
+    cal = await detectCalendar({
+      slotId: id,
+      centre: current.centre,
+      category: current.category,
+      subCategory: current.subCategory,
+    });
+  } finally {
+    checkingSlots.delete(id);
+    activeChecks--;
+  }
   if (!cal.open) {
     const slot = await patchSlot(id, {
       lastCheckAt: now,
