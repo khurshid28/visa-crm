@@ -493,10 +493,129 @@ async function processApplicant(
   };
 }
 
-// Bitta arizachini bitta bosqichdan o'tkazadi (tashqi API uchun).
+// ── QO'LDA TEKSHIRISH (bosh dashboard paneli) ───────────────────────
+//  Bitta userni alohida login/activation qilib tekshirish. register/order
+//  oqimiga TEGMAYDI — faqat o'sha userning gmail profilida (sticky IP)
+//  amal bajaradi va natijani AutomationLog'ga yozadi. Worker bajaradi.
+export type BookStage = "register" | "order" | "login" | "activation";
+
+// Standalone LOGIN tekshiruvi — userning gmail/parol bilan saytga kiradi.
+// runStageWithRetry o'zi AutomationLog (stage="login") yozadi.
+async function runStandaloneLogin(
+  applicant: NonNullable<ApplicantRow>,
+  workerProfile?: string | null,
+): Promise<{ ok: boolean; ref: string | null; note: string }> {
+  if (!(process.env.BOOKING_LOGIN_URL || "").trim()) {
+    const note = "Login URL sozlanmagan (.env: BOOKING_LOGIN_URL)";
+    await prisma.applicant
+      .update({ where: { id: applicant.id }, data: { resultNote: note } })
+      .catch(() => {});
+    return { ok: false, ref: null, note };
+  }
+  const login = await runStageWithRetry(applicant, "login", workerProfile);
+  await prisma.applicant
+    .update({
+      where: { id: applicant.id },
+      data: {
+        resultNote: login.ok
+          ? `Login tekshiruvi: muvaffaqiyatli (${login.note})`
+          : `Login tekshiruvi: bo'lmadi (${login.note})`,
+      },
+    })
+    .catch(() => {});
+  return { ok: login.ok, ref: login.ref, note: login.note };
+}
+
+// Standalone AKTIVATSIYA — userning gmailiga kelgan linkni qayta ochadi
+// (yoki kutadi). register oqimidagi aktivatsiya bilan bir xil mantiq, alohida.
+async function runStandaloneActivation(
+  applicant: NonNullable<ApplicantRow>,
+  workerProfile?: string | null,
+): Promise<{ ok: boolean; ref: string | null; note: string }> {
+  const profileKey =
+    applicant.generatedEmail || applicant.email || applicant.profileKey;
+  await prisma.applicant
+    .update({
+      where: { id: applicant.id },
+      data: { activationStatus: "pending" },
+    })
+    .catch(() => {});
+
+  const actStart = new Date();
+  const act = await runActivation(toAutomationInput(applicant), { profileKey });
+  const actEnd = new Date();
+
+  logBookStep({
+    stage: "activation",
+    user: profileKey,
+    ok: act.ok,
+    statusCode: act.statusCode,
+    exitIp: act.exitIp,
+    proxyServer: act.proxyServer,
+    proxyCountry: act.proxyCountry,
+    proxySession: act.proxySession,
+    requestedAt: act.requestedAt,
+    openedAt: act.openedAt,
+    navMs: act.navMs,
+    durationMs: actEnd.getTime() - actStart.getTime(),
+    pageError: act.pageError,
+    note: act.note,
+  });
+
+  await prisma.automationLog
+    .create({
+      data: {
+        applicantId: applicant.id,
+        groupId: applicant.groupId,
+        stage: "activation",
+        attempt: 1,
+        ok: act.ok,
+        durationMs: actEnd.getTime() - actStart.getTime(),
+        note: act.note,
+        url: act.link ?? null,
+        finalUrl: act.link ?? null,
+        visitedUrls: act.link ?? null,
+        workerProfile: workerProfile ?? null,
+        proxyServer: act.proxyServer,
+        proxyCountry: act.proxyCountry,
+        proxySession: act.proxySession,
+        exitIp: act.exitIp,
+        statusCode: act.statusCode,
+        navMs: act.navMs,
+        pageError: act.pageError,
+        requestedAt: act.requestedAt ? new Date(act.requestedAt) : null,
+        openedAt: act.openedAt ? new Date(act.openedAt) : null,
+        startedAt: actStart,
+        finishedAt: actEnd,
+      },
+    })
+    .catch(() => {});
+
+  await prisma.applicant
+    .update({
+      where: { id: applicant.id },
+      data: {
+        activationStatus: act.ok ? "activated" : "failed",
+        activationEmailTo: act.to ?? applicant.activationEmailTo,
+        activationLink: act.link ?? applicant.activationLink,
+        activationSentAt: act.link ? actStart : applicant.activationSentAt,
+        activatedAt: act.ok ? actEnd : applicant.activatedAt,
+        resultNote: act.ok
+          ? `Aktivatsiya tekshiruvi: tasdiqlandi (${act.note})`
+          : `Aktivatsiya tekshiruvi: bo'lmadi (${act.note})`,
+      },
+    })
+    .catch(() => {});
+
+  return { ok: act.ok, ref: null, note: act.note };
+}
+
+// Bitta arizachini bitta bosqichdan o'tkazadi (tashqi API / worker uchun).
+//  register/order — to'liq oqim (processApplicant).
+//  login/activation — alohida tekshiruv (qo'lda dashboard paneli).
 export async function bookApplicant(
   applicantId: number,
-  stage: Stage,
+  stage: BookStage,
   workerProfile?: string | null,
 ) {
   const applicant = await prisma.applicant.findUnique({
@@ -504,7 +623,15 @@ export async function bookApplicant(
   });
   if (!applicant) return null;
 
-  const out = await processApplicant(applicantId, stage, workerProfile);
+  let out: { ok: boolean; ref: string | null; note: string };
+  if (stage === "login") {
+    out = await runStandaloneLogin(applicant, workerProfile);
+  } else if (stage === "activation") {
+    out = await runStandaloneActivation(applicant, workerProfile);
+  } else {
+    out = await processApplicant(applicantId, stage, workerProfile);
+  }
+
   const updated = await prisma.applicant.findUnique({
     where: { id: applicantId },
   });

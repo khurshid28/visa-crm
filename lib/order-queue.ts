@@ -4,12 +4,17 @@ import { ApplicantStatus } from "@prisma/client";
 import { prisma } from "./prisma";
 import { sanitizeProfileKey } from "./automation";
 
+// Navbat bosqichlari. register/order — asosiy oqim (guruh/global).
+// login/activation — bosh dashboarddagi "qo'lda tekshirish" panelidan bitta
+// userni alohida tekshirish uchun (har biri o'sha userning gmail profilida).
+export type QueueStage = "register" | "order" | "login" | "activation";
+
 // Har bir job = bitta arizachi (user) + bosqich. 10 ta worker parallel oladi.
 export type OrderJob = {
   jobId: string;
   applicantId: number;
   groupId: number;
-  stage: "register" | "order";
+  stage: QueueStage;
   source: "web" | "bot" | "system";
   requestedAt: string;
   reason?: string;
@@ -92,7 +97,7 @@ async function getChannel() {
 async function enqueueApplicantJob(params: {
   applicantId: number;
   groupId: number;
-  stage: "register" | "order";
+  stage: QueueStage;
   source: "web" | "bot" | "system";
   reason?: string;
   force?: boolean;
@@ -236,10 +241,10 @@ export async function enqueueGroupRegister(params: {
   };
 }
 
-// Bitta arizachini (user) navbatga qo'shadi — register yoki order.
+// Bitta arizachini (user) navbatga qo'shadi — register/order/login/activation.
 export async function enqueueApplicant(params: {
   applicantId: number;
-  stage: "register" | "order";
+  stage: QueueStage;
   source?: "web" | "bot" | "system";
   reason?: string;
   force?: boolean;
