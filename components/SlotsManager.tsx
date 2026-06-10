@@ -610,6 +610,33 @@ function SlotCard({
   );
 }
 
+// VFS appointment-detail dropdown tanlovlari — jonli VFS saytdan o'qilgan
+// real qiymatlar. Yangi slot yaratganda default qiymat tanlangan holda turadi.
+const CENTRE_OPTIONS = [
+  { value: "VFS GLOBAL SERVICES UBKN", label: "VFS GLOBAL SERVICES UBKN" },
+];
+const CATEGORY_OPTIONS = [
+  { value: "Latvia Long Stay/Visa D", label: "Latvia Long Stay/Visa D" },
+  { value: "Latvia Short Stay", label: "Latvia Short Stay" },
+];
+const SUBCATEGORY_OPTIONS = [
+  { value: "Cargo drivers (Visa D) Tajik", label: "Cargo drivers (Visa D) Tajik" },
+  {
+    value: "Cargo drivers (Visa D) Uzbek, Turkmen",
+    label: "Cargo drivers (Visa D) Uzbek, Turkmen",
+  },
+  { value: "OCMA decision Tajik", label: "OCMA decision Tajik" },
+  { value: "OCMA decision Uzbek, Turkmen", label: "OCMA decision Uzbek, Turkmen" },
+  { value: "Seasonal Works", label: "Seasonal Works" },
+  { value: "Students Tajik", label: "Students Tajik" },
+  { value: "Students Uzbek, Turkmen", label: "Students Uzbek, Turkmen" },
+  { value: "Work (Visa D) Uzbek, Turkmen", label: "Work (Visa D) Uzbek, Turkmen" },
+  { value: "Work(D Visa) Tajik", label: "Work(D Visa) Tajik" },
+];
+const DEFAULT_CENTRE = CENTRE_OPTIONS[0].value;
+const DEFAULT_CATEGORY = CATEGORY_OPTIONS[0].value;
+const DEFAULT_SUBCATEGORY = "Cargo drivers (Visa D) Uzbek, Turkmen";
+
 function SlotFormModal({
   slot,
   onClose,
@@ -632,9 +659,11 @@ function SlotFormModal({
   const [registerLeadMinutes, setRegisterLeadMinutes] = useState(
     slot?.registerLeadMinutes ?? 5,
   );
-  const [centre, setCentre] = useState(slot?.centre ?? "");
-  const [category, setCategory] = useState(slot?.category ?? "");
-  const [subCategory, setSubCategory] = useState(slot?.subCategory ?? "");
+  const [centre, setCentre] = useState(slot?.centre || DEFAULT_CENTRE);
+  const [category, setCategory] = useState(slot?.category || DEFAULT_CATEGORY);
+  const [subCategory, setSubCategory] = useState(
+    slot?.subCategory || DEFAULT_SUBCATEGORY,
+  );
   const [superUsername, setSuperUsername] = useState("");
   const [superPassword, setSuperPassword] = useState("");
   const [error, setError] = useState("");
@@ -830,34 +859,34 @@ function SlotFormModal({
           </div>
 
           {/* VFS appointment-detail tanlovlari (kalendar tekshiruvi uchun).
-              Bo'sh qoldirsangiz .env default (BOOKING_CALENDAR_*) ishlatiladi. */}
+              Dropdown — yangi slot yaratganda default qiymat tanlangan turadi. */}
           <div className="rounded-xl border border-dashed border-brand-200 bg-brand-50/40 p-3 dark:border-brand-500/20 dark:bg-brand-500/5">
             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-300">
               <CalendarIcon size={13} variant="Bold" /> VFS kalendar tanlovlari
             </p>
             <div className="space-y-3">
               <Field label="Application Centre">
-                <input
+                <Select
                   value={centre}
-                  onChange={(e) => setCentre(e.target.value)}
-                  placeholder="masalan: VFS GLOBAL SERVICES UBKN"
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-brand-500/20"
+                  onChange={setCentre}
+                  options={CENTRE_OPTIONS}
+                  placeholder="Application Centre tanlang"
                 />
               </Field>
               <Field label="Appointment category">
-                <input
+                <Select
                   value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  placeholder="masalan: Latvia Long Stay/Visa D"
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-brand-500/20"
+                  onChange={setCategory}
+                  options={CATEGORY_OPTIONS}
+                  placeholder="Appointment category tanlang"
                 />
               </Field>
               <Field label="Sub-category">
-                <input
+                <Select
                   value={subCategory}
-                  onChange={(e) => setSubCategory(e.target.value)}
-                  placeholder="masalan: Cargo drivers (Visa D) Uzbek, Turkmen"
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-brand-500/20"
+                  onChange={setSubCategory}
+                  options={SUBCATEGORY_OPTIONS}
+                  placeholder="Sub-category tanlang"
                 />
               </Field>
             </div>
