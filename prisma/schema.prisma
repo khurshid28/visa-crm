@@ -433,3 +433,34 @@ model TicketRef {
 
   @@index([ticketId])
 }
+
+// Worker (avtomatlashtirish ishchisi) — order-worker pool'idagi har bir "lane".
+// Default 10 ta yaratiladi (lib/workers.ts ensureSeed). Admin bularni boshqaradi:
+//   - 8 tasini active qilish (faqat shuncha worker ishlaydi);
+//   - yana 10 qo'shib 20 ta qilish (addWorkers).
+// "Faol" (active) workerlar soni = bir vaqtda parallel ishlaydigan brauzerlar soni.
+//
+// CPU BILAN BOG'LIQLIK (muhim): har bir faol worker = 1 ta haqiqiy Chrome (CPU va
+// RAM jihatidan og'ir). Shuning uchun parallel ishlay oladigan workerlar soni
+// PROTSESSOR yadrolariga bog'liq. lib/workers.ts: recommendedMax = yadrolar soni *
+// WORKER_PER_CPU (.env, default 2). Faol workerlar shu limitdan oshsa — ular
+// navbatga turadi, hammasi sekinlashadi (CPU yetishmaydi). Ko'proq parallel kerak
+// bo'lsa — kuchliroq CPU (ko'proq yadro) qo'shish kerak.
+model Worker {
+  id         Int       @id @default(autoincrement())
+  name       String    @unique // "worker-01" — avtomatik beriladi
+  active     Boolean   @default(true) // admin yoqib/o'chiradi (8/10, 20/20...)
+  status     String    @default("offline") // offline | idle | busy
+  pid        Int? // band qilgan jarayon PID (pool ishlatganda)
+  host       String? // qaysi mashinada ishlayapti
+  currentJob String? // hozir bajarayotgan ish ("order applicant=42")
+  jobsDone   Int       @default(0) // shu worker bajargan ishlar soni
+  lastError  String?   @db.Text // oxirgi xato (bo'lsa)
+  claimedAt  DateTime? // pool tomonidan band qilingan vaqt
+  lastSeenAt DateTime? // oxirgi heartbeat vaqti
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([active])
+  @@index([status])
+}

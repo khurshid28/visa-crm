@@ -21,6 +21,7 @@ import {
 import StatusBadge from "@/components/StatusBadge";
 import PeriodFilter from "@/components/PeriodFilter";
 import SiteCheckPanel from "@/components/SiteCheckPanel";
+import WorkersPanel from "@/components/WorkersPanel";
 import { fmtDate } from "@/lib/date";
 
 export const dynamic = "force-dynamic";
@@ -320,6 +321,9 @@ export default async function DashboardPage({
 
       {/* Saytni qo'lda tekshirish (VFS diagnostika) */}
       <SiteCheckPanel />
+
+      {/* Workerlar (pool) — CPU sig'imiga bog'liq boshqaruv */}
+      <WorkersPanel />
 
       {/* Charts */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

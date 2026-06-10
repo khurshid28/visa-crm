@@ -11,6 +11,8 @@
     "worker:order": "tsx scripts/order-worker.ts",
     "worker:slot": "tsx scripts/slot-worker.ts",
     "worker:mail": "tsx scripts/mail-worker.ts",
+    "workers": "tsx scripts/workers.ts",
+    "workers:run": "tsx scripts/worker-pool.ts",
     "slot:check": "tsx scripts/slot-check-test.ts",
     "proxy:check": "tsx scripts/proxy-check.ts",
     "stealth:check": "tsx scripts/stealth-check.ts",
