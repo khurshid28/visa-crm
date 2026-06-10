@@ -2,6 +2,7 @@ import { prisma } from "./prisma";
 import { countryFlag, countryName } from "./options";
 import { detectCalendar } from "./automation";
 import type { CalendarDetectResult } from "./automation";
+import { runWithProxyAttribution } from "./proxy-usage";
 import {
   enqueueSlotRegisteredGroups,
   enqueueSlotStaleReRegisters,
@@ -518,12 +519,14 @@ export async function runSlotTick(
   activeChecks++;
   let cal: CalendarDetectResult;
   try {
-    cal = await detectCalendar({
-      slotId: id,
-      centre: current.centre,
-      category: current.category,
-      subCategory: current.subCategory,
-    });
+    cal = await runWithProxyAttribution({ label: "slot", stage: "slot" }, () =>
+      detectCalendar({
+        slotId: id,
+        centre: current.centre,
+        category: current.category,
+        subCategory: current.subCategory,
+      }),
+    );
   } finally {
     checkingSlots.delete(id);
     activeChecks--;

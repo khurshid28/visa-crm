@@ -9,6 +9,7 @@ import {
 import { bookApplicant } from "../lib/booking";
 import { prisma } from "../lib/prisma";
 import { loadSettingsIntoEnv } from "../lib/settings";
+import { runWithProxyAttribution } from "../lib/proxy-usage";
 import {
   ensureSeed,
   activeWorkers,
@@ -71,7 +72,11 @@ function makeLaneHandler(worker: Worker) {
       console.log(
         `[${worker.name}] ${job.stage} applicant=${job.applicantId} (${profileKey})`,
       );
-      const out = await bookApplicant(job.applicantId, job.stage, worker.name);
+      // Proksi trafigini shu worker nomidan hisoblaymiz (attribution).
+      const out = await runWithProxyAttribution(
+        { label: worker.name, stage: job.stage },
+        () => bookApplicant(job.applicantId, job.stage, worker.name),
+      );
       await incJobsDone(worker.id);
       // eslint-disable-next-line no-console
       console.log(

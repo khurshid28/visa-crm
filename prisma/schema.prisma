@@ -499,3 +499,42 @@ model AppSettings {
   updatedBy String? // oxirgi tahrirlagan super-admin (username)
 }
 
+
+// PROKSI TRAFIK HISOBI — har kuni, har worker (label) bo'yicha qancha trafik
+// (bayt) ishlatilgani. Bayt = Chrome CDP Network.loadingFinished.encodedDataLength
+// yig'indisi (haqiqiy "simdan o'tgan" yuklab olingan trafik). IPRoyal GB bilan
+// hisoblaydi, shuning uchun pul to'lanayotgan resursni kuzatib boramiz.
+// Bir kun + bir label + bir bosqich + bir davlat = BITTA yozuv (increment).
+model ProxyUsage {
+  id       Int    @id @default(autoincrement())
+  day      String // "2026-06-10" (mahalliy YYYY-MM-DD)
+  label    String // worker-01 | slot | web | tizim
+  stage    String @default("") // register | login | order | slot | activation | ""
+  country  String @default("") // proksi chiqish davlati (uz/kz/...)
+  bytes    BigInt @default(0) // jami yuklab olingan bayt (encodedDataLength)
+  requests Int    @default(0) // tugagan tarmoq so'rovlari soni
+  jobs     Int    @default(0) // brauzer sessiyalari (ish) soni
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([day, label, stage, country])
+  @@index([day])
+  @@index([label])
+}
+
+// PROKSI TO'LDIRISH (top-up) DAFTARI — admin "manabunchaga to'landi / N GB
+// sotib olindi" deb qo'lda yozadi. Balans = sum(gb) - ishlatilgan(GB). Proksi
+// 402 (balans tugagan) bo'lsa, to'ldirish yozuvi bilan "blokdan ochiladi"
+// (health kesh tozalanadi, qayta tekshiriladi).
+model ProxyTopup {
+  id        Int      @id @default(autoincrement())
+  gb        Float    @default(0) // sotib olingan/to'langan trafik (GB)
+  amountUsd Float? // ixtiyoriy: necha $ to'landi
+  note      String?  @db.Text // izoh ("manabunchaga to'landi")
+  createdBy String? // yozgan super-admin (username)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+

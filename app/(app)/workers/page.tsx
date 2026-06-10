@@ -1,5 +1,6 @@
 import CpuMonitorCard from "@/components/CpuMonitorCard";
 import WorkersPanel from "@/components/WorkersPanel";
+import ProxyUsagePanel from "@/components/ProxyUsagePanel";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,7 @@ export default function WorkersPage() {
 
       <CpuMonitorCard />
       <WorkersPanel />
+      <ProxyUsagePanel />
     </div>
   );
 }

@@ -363,3 +363,78 @@ export function proxyHealthForApi(): ProxyHealth | null {
   }
   return healthCache;
 }
+
+/**
+ * Health keshini tozalaydi — keyingi tekshiruv proksiga YANGITDAN uradi.
+ * Proksi to'ldirilgach ("balans to'landi") blokni darrov ochish uchun.
+ */
+export function resetProxyHealth(): void {
+  healthCache = null;
+  healthInflight = null;
+}
+
+export type ProxyWatchdogOptions = {
+  intervalMs?: number; // tekshirish oralig'i (default 60s, min 15s)
+  cooldownMs?: number; // qayta ogohlantirish oralig'i (default 10 daqiqa)
+  onAlert: (h: ProxyHealth) => void | Promise<void>; // proksi o'lganda
+  onRecover?: (h: ProxyHealth) => void | Promise<void>; // tiklanganda
+};
+
+/**
+ * PROKSI KUZATUVCHISI (watchdog) — bot jarayonida doimiy ishlaydi. Proksi
+ * o'lsa (HTTP 402 = balans tugagan yoki ulanmaydi) adminlarga Telegram orqali
+ * ogohlantirish yuboradi (cooldown bilan — spam bo'lmasin). Proksi tiklangach
+ * onRecover chaqiriladi. To'xtatish funksiyasini qaytaradi.
+ */
+export function startProxyWatchdog(opts: ProxyWatchdogOptions): () => void {
+  const intervalMs = Math.max(15_000, opts.intervalMs ?? 60_000);
+  const cooldownMs = Math.max(0, opts.cooldownMs ?? 10 * 60 * 1000);
+
+  let wasBad = false;
+  let lastAlertAt = 0;
+
+  const tick = async () => {
+    try {
+      // Bot jarayonida proxy sozlamalari bazadan kelishini ta'minlaymiz.
+      const { loadSettingsIntoEnv } = await import("./settings");
+      await loadSettingsIntoEnv();
+    } catch {
+      /* sozlama yuklanmasa ham tekshiruvga harakat qilamiz */
+    }
+
+    let h: ProxyHealth;
+    try {
+      h = await checkProxyHealth();
+    } catch {
+      return; // tekshiruv o'zi yiqilsa — keyingi tick'da yana
+    }
+
+    if (h.enabled && !h.ok) {
+      const due = Date.now() - lastAlertAt > cooldownMs;
+      if (!wasBad || due) {
+        wasBad = true;
+        lastAlertAt = Date.now();
+        try {
+          await opts.onAlert(h);
+        } catch {
+          /* ogohlantirish xatosi jarayonni to'xtatmasin */
+        }
+      }
+    } else if (h.ok && wasBad) {
+      wasBad = false;
+      if (opts.onRecover) {
+        try {
+          await opts.onRecover(h);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  };
+
+  const timer = setInterval(() => void tick(), intervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+  void tick(); // boshlanishida darrov bir marta
+
+  return () => clearInterval(timer);
+}

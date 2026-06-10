@@ -298,29 +298,58 @@ export default function SettingsManager({
         </div>
       </Card>
 
-      {/* --- CHROME KO'RINISHI --- */}
-      <Card
-        icon={Monitor}
-        title="Chrome ko'rinishi"
-        desc="Worker brauzeri ekranda ko'rinsinmi yoki yashirin (headless) ishlasinmi."
-      >
-        <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
-          <div>
-            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-              Brauzer ko'rinsin
-            </p>
-            <p className="text-[11px] text-slate-400">
-              {form.chromeHeadless
-                ? "Hozir: yashirin (headless) — tezroq, ekranda ko'rinmaydi"
-                : "Hozir: ko'rinadigan — kuzatish/debugging uchun"}
-            </p>
+      {/* --- CHROME + WORKER (yonma-yon) --- */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        {/* --- CHROME KO'RINISHI --- */}
+        <Card
+          icon={Monitor}
+          title="Chrome ko'rinishi"
+          desc="Worker brauzeri ekranda ko'rinsinmi yoki yashirin (headless) ishlasinmi."
+        >
+          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+            <div>
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                Brauzer ko'rinsin
+              </p>
+              <p className="text-[11px] text-slate-400">
+                {form.chromeHeadless
+                  ? "Hozir: yashirin (headless) — tezroq, ekranda ko'rinmaydi"
+                  : "Hozir: ko'rinadigan — kuzatish/debugging uchun"}
+              </p>
+            </div>
+            <Toggle
+              on={!form.chromeHeadless}
+              onChange={(v) => set("chromeHeadless", !v)}
+            />
           </div>
-          <Toggle
-            on={!form.chromeHeadless}
-            onChange={(v) => set("chromeHeadless", !v)}
-          />
-        </div>
-      </Card>
+        </Card>
+
+        {/* --- WORKER'LAR --- */}
+        <Card
+          icon={Cpu}
+          title="Worker sig'imi"
+          desc="Bitta CPU yadrosiga to'g'ri keladigan parallel worker soni."
+        >
+          <Field
+            label="Worker / CPU yadro"
+            hint="Ko'paytirsangiz parallel ishlar ortadi, lekin CPU/RAM yuki oshadi (1–8)."
+          >
+            <input
+              type="number"
+              min={1}
+              max={8}
+              value={form.workerPerCpu}
+              onChange={(e) => set("workerPerCpu", num(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
+          <div className="flex items-start gap-2 rounded-xl bg-amber-50/60 px-3 py-2.5 text-[11px] text-amber-700 dark:bg-amber-500/5 dark:text-amber-300">
+            <InfoCircle size={14} variant="Bold" className="mt-0.5 shrink-0" />
+            O'zgartirish ishlab turgan worker-pool'ga ~10 soniyada yetib boradi.
+            Worker sonini sezilarli o'zgartirsangiz, poolni qayta ishga tushiring.
+          </div>
+        </Card>
+      </div>
 
       {/* --- TIMEOUT'LAR --- */}
       <Card
@@ -330,28 +359,32 @@ export default function SettingsManager({
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field
-            label="Captcha timeout (ms)"
-            hint="Turnstile token kutish (5000–180000)."
+            label="Captcha timeout (soniya)"
+            hint="Turnstile token kutish (5–180 soniya)."
           >
             <input
               type="number"
-              min={5000}
-              max={180000}
-              value={form.captchaTimeoutMs}
-              onChange={(e) => set("captchaTimeoutMs", num(e.target.value))}
+              min={5}
+              max={180}
+              value={Math.round(form.captchaTimeoutMs / 1000)}
+              onChange={(e) =>
+                set("captchaTimeoutMs", num(e.target.value) * 1000)
+              }
               className={inputCls}
             />
           </Field>
           <Field
-            label="Cloudflare challenge timeout (ms)"
-            hint="CF challenge kutish (5000–180000)."
+            label="Cloudflare challenge timeout (soniya)"
+            hint="CF challenge kutish (5–180 soniya)."
           >
             <input
               type="number"
-              min={5000}
-              max={180000}
-              value={form.cfChallengeTimeoutMs}
-              onChange={(e) => set("cfChallengeTimeoutMs", num(e.target.value))}
+              min={5}
+              max={180}
+              value={Math.round(form.cfChallengeTimeoutMs / 1000)}
+              onChange={(e) =>
+                set("cfChallengeTimeoutMs", num(e.target.value) * 1000)
+              }
               className={inputCls}
             />
           </Field>
@@ -381,32 +414,6 @@ export default function SettingsManager({
               className={inputCls}
             />
           </Field>
-        </div>
-      </Card>
-
-      {/* --- WORKER'LAR --- */}
-      <Card
-        icon={Cpu}
-        title="Worker sig'imi"
-        desc="Bitta CPU yadrosiga to'g'ri keladigan parallel worker soni."
-      >
-        <Field
-          label="Worker / CPU yadro"
-          hint="Ko'paytirsangiz parallel ishlar ortadi, lekin CPU/RAM yuki oshadi (1–8)."
-        >
-          <input
-            type="number"
-            min={1}
-            max={8}
-            value={form.workerPerCpu}
-            onChange={(e) => set("workerPerCpu", num(e.target.value))}
-            className={inputCls}
-          />
-        </Field>
-        <div className="flex items-start gap-2 rounded-xl bg-amber-50/60 px-3 py-2.5 text-[11px] text-amber-700 dark:bg-amber-500/5 dark:text-amber-300">
-          <InfoCircle size={14} variant="Bold" className="mt-0.5 shrink-0" />
-          O'zgartirish ishlab turgan worker-pool'ga ~10 soniyada yetib boradi.
-          Worker sonini sezilarli o'zgartirsangiz, poolni qayta ishga tushiring.
         </div>
       </Card>
 

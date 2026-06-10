@@ -13,12 +13,59 @@ import {
   type ProxyTarget,
   type ProxyConfig,
 } from "../proxy";
+import { recordProxyUsage, currentAttribution } from "../proxy-usage";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as net from "net";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
+import type { BrowserContext, Page } from "playwright";
 import type { Stage } from "./types";
+
+// PROKSI TRAFIGINI O'LCHASH — context'dagi har bir page'ga CDP sessiya ulab,
+// `Network.loadingFinished.encodedDataLength` (haqiqiy yuklab olingan bayt)
+// yig'amiz. Context yopilganda jami baytni joriy attribution (worker/slot)
+// nomidan bazaga yozamiz. Faqat proksi HAQIQATAN ishlatilganda chaqiriladi.
+function attachProxyUsageMeter(
+  context: BrowserContext,
+  country: string | null | undefined,
+): void {
+  // Attribution'ni HOZIR (sinxron) olamiz — context yopilganda async
+  // kontekst yo'qolgan bo'lishi mumkin.
+  const attr = currentAttribution();
+  const label = attr.label || "tizim";
+  const stage = attr.stage || "";
+  const ctry = (country || "").toString();
+
+  let bytes = 0;
+  let requests = 0;
+  let recorded = false;
+
+  const attachToPage = async (page: Page) => {
+    try {
+      const client = await context.newCDPSession(page);
+      await client.send("Network.enable");
+      client.on(
+        "Network.loadingFinished",
+        (e: { encodedDataLength?: number }) => {
+          bytes += Number(e?.encodedDataLength) || 0;
+          requests += 1;
+        },
+      );
+    } catch {
+      /* ba'zi page'larga CDP ulanmasligi mumkin — e'tiborsiz */
+    }
+  };
+
+  for (const page of context.pages()) void attachToPage(page);
+  context.on("page", (page) => void attachToPage(page));
+
+  context.on("close", () => {
+    if (recorded) return;
+    recorded = true;
+    recordProxyUsage({ bytes, requests, label, stage, country: ctry });
+  });
+}
 
 export function envHeadless(): boolean {
   const v = (process.env.BOOKING_HEADLESS || "true").toLowerCase();
@@ -1134,6 +1181,7 @@ export async function openBrowserContext(
       // navigator.languages'ni CDP'da O'ZGARTIRMAYMIZ — real Chrome HTTP
       // Accept-Language header bilan nomuvofiqlik bo'lmasin.
       await applyCdpStealth(real.context, proxyTarget?.profileKey ?? null);
+      if (proxy) attachProxyUsageMeter(real.context, proxyCountry);
       return real;
     }
     // CDP muvaffaqiyatsiz bo'lsa — oddiy rejimga tushamiz (pastda).
@@ -1187,6 +1235,7 @@ export async function openBrowserContext(
       fp.extraHTTPHeaders["Accept-Language"],
       proxyTarget?.profileKey ?? null,
     );
+    if (proxy) attachProxyUsageMeter(context, proxyCountry);
     return {
       context,
       close: async () => {
@@ -1216,6 +1265,7 @@ export async function openBrowserContext(
       fp.extraHTTPHeaders["Accept-Language"],
       proxyTarget?.profileKey ?? null,
     );
+    if (proxy) attachProxyUsageMeter(context, proxyCountry);
     return {
       context,
       close: async () => context.close(),
@@ -1241,6 +1291,7 @@ export async function openBrowserContext(
     fp.extraHTTPHeaders["Accept-Language"],
     proxyTarget?.profileKey ?? null,
   );
+  if (proxy) attachProxyUsageMeter(context, proxyCountry);
   return {
     context,
     close: async () => browser.close(),
