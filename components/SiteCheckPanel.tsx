@@ -12,7 +12,6 @@ import {
   Login,
   Sms,
   Calendar,
-  Flash,
   Timer1,
   CloseSquare,
   Global,
@@ -58,22 +57,6 @@ type LogRow = {
   exitIp: string | null;
   finalUrl: string | null;
   createdAt: string;
-};
-
-type SlotLog = {
-  id: number;
-  ok: boolean;
-  note: string | null;
-  durationMs: number;
-  finalUrl: string | null;
-  createdAt: string;
-};
-
-type SlotResult = {
-  open: boolean;
-  note: string;
-  url: string;
-  durationMs: number;
 };
 
 type ActionKey = "register" | "login" | "activation" | "order";
@@ -150,11 +133,6 @@ function StatusPill({ status }: { status: string | null }) {
 export default function SiteCheckPanel() {
   const { toast } = useToast();
 
-  // Umumiy slot
-  const [slotBusy, setSlotBusy] = useState(false);
-  const [slotResult, setSlotResult] = useState<SlotResult | null>(null);
-  const [slotLogs, setSlotLogs] = useState<SlotLog[]>([]);
-
   // Qidiruv
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<ApplicantHit[]>([]);
@@ -165,20 +143,6 @@ export default function SiteCheckPanel() {
   const [logs, setLogs] = useState<LogRow[]>([]);
   const [showPwd, setShowPwd] = useState(false);
   const [actionBusy, setActionBusy] = useState<ActionKey | null>(null);
-
-  const loadSlotLogs = useCallback(async () => {
-    try {
-      const res = await fetch("/api/site-check", { cache: "no-store" });
-      const data = await res.json().catch(() => null);
-      if (res.ok && Array.isArray(data?.slotLogs)) setSlotLogs(data.slotLogs);
-    } catch {
-      // jim
-    }
-  }, []);
-
-  useEffect(() => {
-    loadSlotLogs();
-  }, [loadSlotLogs]);
 
   // Debounced qidiruv (>=2 belgi)
   useEffect(() => {
@@ -236,38 +200,6 @@ export default function SiteCheckPanel() {
     loadSelected(hit.id);
   }
 
-  async function runSlot() {
-    setSlotBusy(true);
-    setSlotResult(null);
-    try {
-      const res = await fetch("/api/site-check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "slot" }),
-      });
-      const data = await res.json().catch(() => null);
-      if (res.ok && data?.ok) {
-        setSlotResult({
-          open: !!data.open,
-          note: data.note || "",
-          url: data.url || "",
-          durationMs: data.durationMs || 0,
-        });
-        toast(
-          data.open ? "Saytda slot OCHIQ" : "Saytda slot yopiq",
-          data.open ? "success" : "info",
-        );
-        loadSlotLogs();
-      } else {
-        toast(data?.error || "Slot tekshirib bo'lmadi", "error");
-      }
-    } catch {
-      toast("Tarmoq xatosi", "error");
-    } finally {
-      setSlotBusy(false);
-    }
-  }
-
   async function runAction(action: ActionKey) {
     if (!selected) return;
     setActionBusy(action);
@@ -303,95 +235,15 @@ export default function SiteCheckPanel() {
               Saytni qo'lda tekshirish
             </h2>
             <p className="text-xs text-slate-400">
-              VFS sayti diagnostikasi — slot, register, login, aktivatsiya, order
+              VFS sayti diagnostikasi — user bo'yicha register, login,
+              aktivatsiya, order
             </p>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* ── Umumiy slot tekshiruvi ───────────────────────────── */}
-        <div className="rounded-xl border border-slate-100 p-4 dark:border-slate-800">
-          <div className="mb-3 flex items-center gap-2">
-            <Flash size={16} variant="Bold" className="text-amber-500" />
-            <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-              Umumiy slot
-            </h3>
-          </div>
-          <p className="mb-3 text-xs text-slate-400">
-            Saytda hozir joy bor-yo'qligini tekshiradi (userga bog'liq emas).
-          </p>
-          <button
-            onClick={runSlot}
-            disabled={slotBusy}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-50"
-          >
-            {slotBusy ? (
-              <Refresh size={16} className="animate-spin" />
-            ) : (
-              <Flash size={16} variant="Bold" />
-            )}
-            {slotBusy ? "Tekshirilmoqda..." : "Slotni tekshirish"}
-          </button>
-
-          {slotResult && (
-            <div
-              className={`mt-3 rounded-lg p-3 text-xs ring-1 ${
-                slotResult.open
-                  ? "bg-emerald-50 text-emerald-700 ring-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20"
-                  : "bg-slate-50 text-slate-600 ring-slate-100 dark:bg-slate-800/50 dark:text-slate-300 dark:ring-slate-700"
-              }`}
-            >
-              <div className="flex items-center gap-1.5 font-semibold">
-                {slotResult.open ? (
-                  <TickCircle size={14} variant="Bold" />
-                ) : (
-                  <CloseCircle size={14} variant="Bold" />
-                )}
-                {slotResult.open ? "Slot OCHIQ" : "Slot yopiq"}
-                <span className="ml-auto font-normal text-slate-400">
-                  {(slotResult.durationMs / 1000).toFixed(1)}s
-                </span>
-              </div>
-              {slotResult.note && (
-                <p className="mt-1 text-slate-500 dark:text-slate-400">
-                  {slotResult.note}
-                </p>
-              )}
-            </div>
-          )}
-
-          {slotLogs.length > 0 && (
-            <div className="mt-4">
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                So'nggi tekshiruvlar
-              </p>
-              <div className="space-y-1.5">
-                {slotLogs.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400"
-                  >
-                    <span
-                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                        s.ok ? "bg-emerald-500" : "bg-slate-400"
-                      }`}
-                    />
-                    <span className="font-medium text-slate-600 dark:text-slate-300">
-                      {s.ok ? "Ochiq" : "Yopiq"}
-                    </span>
-                    <span className="ml-auto tabular-nums text-slate-400">
-                      {fmtTime(s.createdAt)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ── User orqali tekshirish ───────────────────────────── */}
-        <div className="lg:col-span-2">
+      {/* ── User orqali tekshirish ───────────────────────────── */}
+      <div>
           <div className="relative">
             <SearchNormal1
               size={16}
@@ -585,7 +437,6 @@ export default function SiteCheckPanel() {
             </div>
           )}
         </div>
-      </div>
     </div>
   );
 }

@@ -567,6 +567,98 @@ export async function runSlotTick(
   return { slot, checked: true, slotOpen: true, message: slot.lastMessage };
 }
 
+// ===========================================================================
+//  QO'LDA BRAUZER TEKSHIRUVI (checkSlotNow) — har bir slot kartasidagi
+//  "Brauzerda tekshirish" tugmasi uchun. Slotning markaz/kategoriya/
+//  subkategoriyasi bo'yicha VFS kalendarini ochib, bo'sh kun bor-yo'qligini
+//  DARHOL tekshiradi — vaqt oynasiga BOG'LIQ EMAS (istalgan paytda ishlaydi).
+//  Bu faqat DIAGNOSTIKA: order navbatini ISHGA TUSHIRMAYDI va active/openedAt
+//  holatini O'ZGARTIRMAYDI (runSlotTick'dan farqi shu). Faqat lastCheckAt +
+//  lastMessage (+ skrinshot) yangilanadi. Ko'p slotli himoya
+//  (checkingSlots/activeChecks) bu yerda ham qo'llanadi — Chrome'lar
+//  ust-ustiga ochilmaydi.
+// ===========================================================================
+export type SlotCheckNowResult = {
+  ok: boolean;
+  open: boolean;
+  note: string;
+  durationMs: number;
+  screenshotPath: string | null;
+  slot: SlotView | null;
+};
+
+export async function checkSlotNow(id: number): Promise<SlotCheckNowResult> {
+  const now = new Date();
+  const current = await prisma.slot.findUnique({ where: { id } });
+  if (!current) {
+    return {
+      ok: false,
+      open: false,
+      note: "Slot topilmadi",
+      durationMs: 0,
+      screenshotPath: null,
+      slot: null,
+    };
+  }
+
+  // Bir slot bir vaqtda faqat BITTA Chrome ochadi (qayta kirishni bloklaydi).
+  if (checkingSlots.has(id)) {
+    return {
+      ok: false,
+      open: false,
+      note: "Tekshiruv davom etmoqda (oldingisi hali tugamadi)",
+      durationMs: 0,
+      screenshotPath: null,
+      slot: toView(current as SlotRow),
+    };
+  }
+  // Global bir vaqtdagi tekshiruvlar chegarasi to'lgan bo'lsa — navbatda.
+  if (activeChecks >= SLOT_CHECK_CONCURRENCY) {
+    return {
+      ok: false,
+      open: false,
+      note: "Navbatda: boshqa slot tekshirilmoqda",
+      durationMs: 0,
+      screenshotPath: null,
+      slot: toView(current as SlotRow),
+    };
+  }
+
+  checkingSlots.add(id);
+  activeChecks++;
+  let cal: CalendarDetectResult;
+  try {
+    cal = await runWithProxyAttribution({ label: "slot", stage: "slot" }, () =>
+      detectCalendar({
+        slotId: id,
+        centre: current.centre,
+        category: current.category,
+        subCategory: current.subCategory,
+      }),
+    );
+  } finally {
+    checkingSlots.delete(id);
+    activeChecks--;
+  }
+
+  const message = cal.open
+    ? `Qo'lda tekshiruv: kalendar OCHIQ (${cal.availableDates.length} bo'sh kun)`
+    : `Qo'lda tekshiruv: ${cal.note}`;
+  const slot = await patchSlot(id, {
+    lastCheckAt: now,
+    lastMessage: message,
+    ...(cal.screenshotPath ? { lastShotPath: cal.screenshotPath } : {}),
+  });
+  return {
+    ok: true,
+    open: cal.open,
+    note: cal.note,
+    durationMs: cal.durationMs,
+    screenshotPath: cal.screenshotPath,
+    slot,
+  };
+}
+
 // Slot topilganda (success) adminlarga Telegram orqali xabar + skrinshot yuboradi.
 // .env: SLOT_NOTIFY_TELEGRAM=false bo'lsa o'chadi (default: yoqilgan).
 async function notifySlotOpen(

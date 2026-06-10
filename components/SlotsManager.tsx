@@ -16,9 +16,12 @@ import {
   Profile2User,
   People,
   Clock,
+  Refresh,
+  Global,
 } from "iconsax-react";
 import Select from "@/components/Select";
 import DateTimePicker from "@/components/DateTimePicker";
+import { useToast } from "@/components/Toast";
 import { ORIGIN_COUNTRIES, DEST_COUNTRIES } from "@/lib/options";
 import { fmtDateTime } from "@/lib/date";
 import type { SlotView } from "@/lib/slots";
@@ -53,10 +56,15 @@ export default function SlotsManager({
   slots: SlotView[];
 }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [slots, setSlots] = useState<SlotView[]>(initial);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<SlotView | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  const [checkingId, setCheckingId] = useState<number | null>(null);
+  const [checkResults, setCheckResults] = useState<
+    Record<number, SlotCheckUiResult>
+  >({});
   const ticking = useRef(false);
 
   // Server'dan slotlarni 5 soniyada yangilab turamiz.
@@ -112,6 +120,50 @@ export default function SlotsManager({
     router.refresh();
   }
 
+  // Qo'lda brauzer tekshiruvi — shu slotning markaz/kategoriyasi bo'yicha VFS
+  // kalendarini ochib, bo'sh kun bor-yo'qligini darhol tekshiradi (vaqt
+  // oynasiga bog'liq emas). Faqat diagnostika — order navbatini ishga
+  // tushirmaydi.
+  async function checkNow(id: number) {
+    if (checkingId !== null) return;
+    setCheckingId(id);
+    try {
+      const res = await fetch(`/api/slots/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "check" }),
+      });
+      const data = await res.json().catch(() => null);
+      if (data) {
+        setCheckResults((m) => ({
+          ...m,
+          [id]: {
+            ok: !!data.ok,
+            open: !!data.open,
+            note: data.note || "",
+            durationMs: data.durationMs || 0,
+            at: Date.now(),
+          },
+        }));
+        if (data.ok) {
+          toast(
+            data.open ? "Slot OCHIQ — bo'sh kun bor" : "Slot yopiq",
+            data.open ? "success" : "info",
+          );
+        } else {
+          toast(data.note || "Tekshirib bo'lmadi", "error");
+        }
+      } else {
+        toast("Tarmoq xatosi", "error");
+      }
+      await refresh();
+    } catch {
+      toast("Tarmoq xatosi", "error");
+    } finally {
+      setCheckingId(null);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
@@ -144,12 +196,15 @@ export default function SlotsManager({
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {slots.map((s) => (
             <SlotCard
               key={s.id}
               slot={s}
               busy={busy === s.id}
+              checking={checkingId === s.id}
+              checkResult={checkResults[s.id]}
+              onCheck={() => checkNow(s.id)}
               onAction={(action) => control(s.id, action)}
               onEdit={() => setEditing(s)}
             />
@@ -187,6 +242,15 @@ type Phase = {
   cls: string;
   dot: string;
   pulse: boolean;
+};
+
+// Qo'lda brauzer tekshiruvi natijasi (UI tomonida har bir slot uchun saqlanadi).
+type SlotCheckUiResult = {
+  ok: boolean;
+  open: boolean;
+  note: string;
+  durationMs: number;
+  at: number;
 };
 
 function phaseOf(slot: SlotView): Phase {
@@ -472,11 +536,17 @@ function Chip({
 function SlotCard({
   slot,
   busy,
+  checking,
+  checkResult,
+  onCheck,
   onAction,
   onEdit,
 }: {
   slot: SlotView;
   busy: boolean;
+  checking: boolean;
+  checkResult?: SlotCheckUiResult;
+  onCheck: () => void;
   onAction: (action: "go" | "pause" | "stop") => void;
   onEdit: () => void;
 }) {
@@ -579,6 +649,58 @@ function SlotCard({
           })}
         </div>
       )}
+
+      {/* Qo'lda brauzer tekshiruvi — shu slot konfigi (markaz/kategoriya) bilan
+          VFS kalendarini ochib, bo'sh kun bor-yo'qligini darhol tekshiradi. */}
+      <div className="space-y-2 rounded-xl border border-slate-100 p-2.5 dark:border-slate-800">
+        <button
+          onClick={onCheck}
+          disabled={checking}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:from-violet-700 hover:to-indigo-700 disabled:opacity-60"
+        >
+          {checking ? (
+            <Refresh size={15} className="animate-spin" />
+          ) : (
+            <Global size={15} variant="Bold" />
+          )}
+          {checking ? "Brauzerda tekshirilmoqda..." : "Brauzerda tekshirish"}
+        </button>
+
+        {checkResult && (
+          <div
+            className={`rounded-lg p-2.5 text-[11px] ring-1 ${
+              checkResult.open
+                ? "bg-emerald-50 text-emerald-700 ring-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20"
+                : checkResult.ok
+                  ? "bg-slate-50 text-slate-600 ring-slate-100 dark:bg-slate-800/50 dark:text-slate-300 dark:ring-slate-700"
+                  : "bg-rose-50 text-rose-700 ring-rose-100 dark:bg-rose-500/10 dark:text-rose-300 dark:ring-rose-500/20"
+            }`}
+          >
+            <div className="flex items-center gap-1.5 font-semibold">
+              {checkResult.open ? (
+                <TickCircle size={13} variant="Bold" />
+              ) : (
+                <CloseCircle size={13} variant="Bold" />
+              )}
+              {checkResult.open
+                ? "Slot OCHIQ"
+                : checkResult.ok
+                  ? "Slot yopiq"
+                  : "Tekshirilmadi"}
+              {checkResult.durationMs > 0 && (
+                <span className="ml-auto font-normal tabular-nums text-slate-400">
+                  {(checkResult.durationMs / 1000).toFixed(1)}s
+                </span>
+              )}
+            </div>
+            {checkResult.note && (
+              <p className="mt-1 text-slate-500 dark:text-slate-400">
+                {checkResult.note}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center gap-2">
         {!slot.active || slot.paused ? (

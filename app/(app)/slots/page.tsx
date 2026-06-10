@@ -7,8 +7,9 @@ export const dynamic = "force-dynamic";
 export default async function SlotsPage() {
   const slots = await listSlots();
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="space-y-8">
       <SlotsManager slots={slots} />
+      <div className="border-t border-slate-200 dark:border-slate-800" />
       <SiteCheckPanel />
     </div>
   );

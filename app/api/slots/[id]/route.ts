@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { configureSlot, controlSlot, runSlotTick } from "@/lib/slots";
+import {
+  checkSlotNow,
+  configureSlot,
+  controlSlot,
+  runSlotTick,
+} from "@/lib/slots";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 120;
 
 export async function PATCH(
   req: NextRequest,
@@ -23,6 +29,12 @@ export async function PATCH(
   if (action === "tick") {
     const result = await runSlotTick(id);
     return NextResponse.json({ ok: true, ...result });
+  }
+
+  // Qo'lda brauzer tekshiruvi — vaqt oynasiga bog'liq emas, faqat diagnostika.
+  if (action === "check") {
+    const result = await checkSlotNow(id);
+    return NextResponse.json(result);
   }
 
   if (action === "configure") {
