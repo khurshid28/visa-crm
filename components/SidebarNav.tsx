@@ -17,8 +17,6 @@ import {
 
 const LINKS = [
   { href: "/dashboard", label: "Boshqaruv paneli", icon: Category },
-  { href: "/settings", label: "Sozlamalar", icon: Setting2 },
-  { href: "/tickets", label: "Tiketlar", icon: Ticket },
   { href: "/slots", label: "Slotlar", icon: Calendar },
   { href: "/groups", label: "Guruhlar", icon: Profile2User },
   { href: "/users", label: "Userlar", icon: People },
@@ -26,6 +24,12 @@ const LINKS = [
   { href: "/monitoring", label: "Monitoring", icon: Chart },
   { href: "/server", label: "Server", icon: Driver },
   { href: "/workers", label: "Workerlar", icon: Box },
+];
+
+// Workerlardan keyin — chiziq bilan ajratilgan boshqaruv bo'limi.
+const SECONDARY_LINKS = [
+  { href: "/settings", label: "Sozlamalar", icon: Setting2 },
+  { href: "/tickets", label: "Tiketlar", icon: Ticket },
 ];
 
 export default function SidebarNav({
@@ -68,6 +72,8 @@ export default function SidebarNav({
   return (
     <nav className="flex flex-1 flex-col gap-1">
       {LINKS.map(renderLink)}
+      <div className="my-2 border-t border-slate-200 dark:border-slate-700" />
+      {SECONDARY_LINKS.map(renderLink)}
     </nav>
   );
 }

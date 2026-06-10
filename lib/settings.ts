@@ -78,6 +78,45 @@ export type AppSettings = {
   proxySessionTtlMin: number;
   typeDelayMs: number;
 
+  // --- v3: web slot-check matnlari ---
+  bookingSlotUrl: string;
+  bookingSlotOpenText: string;
+  bookingSlotClosedText: string;
+
+  // --- v3: VFS kalendar tanlovlari ---
+  calendarCentre: string;
+  calendarCategory: string;
+  calendarSubcategory: string;
+  calendarNoSlotText: string;
+  continueText: string;
+  calendarReadyMs: number;
+
+  // --- v3: aktivatsiya xati ---
+  activationFrom: string;
+  activationTimeoutMs: number;
+  activationPollMs: number;
+  activationSinceMs: number;
+
+  // --- v3: slot login / backoff ---
+  slotRestrictedBackoffMin: number;
+  slotLoginCaptchaRetries: number;
+  slotLoginCooldownMin: number;
+
+  // --- v3: captcha vaqtlari ---
+  captchaAutopassMs: number;
+  verifyCaptchaAppearMs: number;
+  captchaMeasureMs: number;
+
+  // --- v3: brauzer (qo'shimcha) ---
+  userAgent: string;
+  viewport: string;
+  cdpPort: number;
+  chromePath: string;
+  cdpFreshProfile: boolean;
+  cdpKeepCache: boolean;
+  cmsCache: boolean;
+  assetCache: boolean;
+
   configVersion: number;
   updatedAt: Date;
   updatedBy: string | null;
@@ -101,13 +140,14 @@ const ENV_NUM = (v: string | undefined, dflt: number): number => {
 
 // Joriy konfiguratsiya versiyasi. Oshirilganda — yangi maydonlar .env'dan
 // BIR MARTA to'ldiriladi (eski singleton yozuv bo'sh ko'rsatmasligi uchun).
-const CONFIG_VERSION = 2;
+// v2 -> v3: ko'proq boshqaruv maydonlari (slot matnlari, kalendar, aktivatsiya,
+// captcha vaqtlari, brauzer) qo'shildi.
+const CONFIG_VERSION = 3;
 
 /**
- * 2-versiyada qo'shilgan yangi maydonlarni joriy .env'dan oladi. Yangi yozuv
- * yaratishda ham, eski yozuvni migratsiya qilishda ham ishlatiladi.
+ * 2-versiyada qo'shilgan maydonlarni joriy .env'dan oladi.
  */
-function newFieldsSeed(): SettingsPatch {
+function v2FieldsSeed(): SettingsPatch {
   return {
     registerUrl: (process.env.BOOKING_REGISTER_URL || "").trim(),
     loginUrl: (process.env.BOOKING_LOGIN_URL || "").trim(),
@@ -137,6 +177,61 @@ function newFieldsSeed(): SettingsPatch {
     proxySessionTtlMin: ENV_NUM(process.env.PROXY_SESSION_TTL_MIN, 60),
     typeDelayMs: ENV_NUM(process.env.BOOKING_TYPE_DELAY_MS, 35),
   };
+}
+
+/**
+ * 3-versiyada qo'shilgan maydonlarni joriy .env'dan oladi.
+ */
+function v3FieldsSeed(): SettingsPatch {
+  return {
+    bookingSlotUrl: (process.env.BOOKING_SLOT_URL || "").trim(),
+    bookingSlotOpenText: (
+      process.env.BOOKING_SLOT_OPEN_TEXT || "available|book now|select slot"
+    ).trim(),
+    bookingSlotClosedText: (
+      process.env.BOOKING_SLOT_CLOSED_TEXT ||
+      "no appointment|fully booked|closed"
+    ).trim(),
+    calendarCentre: (process.env.BOOKING_CALENDAR_CENTRE || "").trim(),
+    calendarCategory: (process.env.BOOKING_CALENDAR_CATEGORY || "").trim(),
+    calendarSubcategory: (
+      process.env.BOOKING_CALENDAR_SUBCATEGORY || ""
+    ).trim(),
+    calendarNoSlotText: (
+      process.env.BOOKING_CALENDAR_NO_SLOT_TEXT || ""
+    ).trim(),
+    continueText: (process.env.BOOKING_CONTINUE_TEXT || "Continue").trim(),
+    calendarReadyMs: ENV_NUM(process.env.BOOKING_CALENDAR_READY_MS, 30000),
+    activationFrom: (process.env.ACTIVATION_FROM || "").trim(),
+    activationTimeoutMs: ENV_NUM(process.env.ACTIVATION_TIMEOUT_MS, 180000),
+    activationPollMs: ENV_NUM(process.env.ACTIVATION_POLL_MS, 4000),
+    activationSinceMs: ENV_NUM(process.env.ACTIVATION_SINCE_MS, 1800000),
+    slotRestrictedBackoffMin: ENV_NUM(
+      process.env.SLOT_RESTRICTED_BACKOFF_MIN,
+      720,
+    ),
+    slotLoginCaptchaRetries: ENV_NUM(process.env.SLOT_LOGIN_CAPTCHA_RETRIES, 3),
+    slotLoginCooldownMin: ENV_NUM(process.env.SLOT_LOGIN_COOLDOWN_MIN, 30),
+    captchaAutopassMs: ENV_NUM(process.env.BOOKING_CAPTCHA_AUTOPASS_MS, 800),
+    verifyCaptchaAppearMs: ENV_NUM(
+      process.env.BOOKING_VERIFY_CAPTCHA_APPEAR_MS,
+      4000,
+    ),
+    captchaMeasureMs: ENV_NUM(process.env.BOOKING_CAPTCHA_MEASURE_MS, 18000),
+    userAgent: (process.env.BOOKING_USER_AGENT || "").trim(),
+    viewport: (process.env.BOOKING_VIEWPORT || "1366x768").trim(),
+    cdpPort: ENV_NUM(process.env.BOOKING_CDP_PORT, 9222),
+    chromePath: (process.env.BOOKING_CHROME_PATH || "").trim(),
+    cdpFreshProfile: ENV_TRUE(process.env.BOOKING_CDP_FRESH_PROFILE, true),
+    cdpKeepCache: ENV_TRUE(process.env.BOOKING_CDP_KEEP_CACHE, true),
+    cmsCache: ENV_TRUE(process.env.BOOKING_CMS_CACHE, true),
+    assetCache: ENV_TRUE(process.env.BOOKING_ASSET_CACHE, true),
+  };
+}
+
+/** Yangi yozuv yaratishda — v1'dan keyingi BARCHA maydonlar .env'dan. */
+function newFieldsSeed(): SettingsPatch {
+  return { ...v2FieldsSeed(), ...v3FieldsSeed() };
 }
 
 /**
@@ -177,9 +272,16 @@ export async function getAppSettings(): Promise<AppSettings> {
   });
   let s = row as AppSettings;
   if (s.configVersion < CONFIG_VERSION) {
+    // Incremental migratsiya: faqat YANGI maydonlar .env'dan to'ldiriladi,
+    // foydalanuvchi avval o'zgartirgan maydonlar ustidan yozilmaydi.
+    const data: SettingsPatch & { configVersion: number } = {
+      configVersion: CONFIG_VERSION,
+    };
+    if (s.configVersion < 2) Object.assign(data, v2FieldsSeed());
+    if (s.configVersion < 3) Object.assign(data, v3FieldsSeed());
     const migrated = await prisma.appSettings.update({
       where: { id: 1 },
-      data: { ...newFieldsSeed(), configVersion: CONFIG_VERSION },
+      data,
     });
     s = migrated as AppSettings;
   }
@@ -236,6 +338,38 @@ export function applySettingsToEnv(s: AppSettings): void {
   process.env.REGISTER_TTL_HOURS = String(s.registerTtlHours);
   process.env.PROXY_SESSION_TTL_MIN = String(s.proxySessionTtlMin);
   process.env.BOOKING_TYPE_DELAY_MS = String(s.typeDelayMs);
+
+  // --- v3 maydonlar ---
+  setStr("BOOKING_SLOT_URL", s.bookingSlotUrl);
+  setStr("BOOKING_SLOT_OPEN_TEXT", s.bookingSlotOpenText);
+  setStr("BOOKING_SLOT_CLOSED_TEXT", s.bookingSlotClosedText);
+  setStr("BOOKING_CALENDAR_CENTRE", s.calendarCentre);
+  setStr("BOOKING_CALENDAR_CATEGORY", s.calendarCategory);
+  setStr("BOOKING_CALENDAR_SUBCATEGORY", s.calendarSubcategory);
+  setStr("BOOKING_CALENDAR_NO_SLOT_TEXT", s.calendarNoSlotText);
+  setStr("BOOKING_CONTINUE_TEXT", s.continueText);
+  setStr("ACTIVATION_FROM", s.activationFrom);
+  setStr("BOOKING_USER_AGENT", s.userAgent);
+  setStr("BOOKING_VIEWPORT", s.viewport);
+  setStr("BOOKING_CHROME_PATH", s.chromePath);
+
+  process.env.BOOKING_CALENDAR_READY_MS = String(s.calendarReadyMs);
+  process.env.ACTIVATION_TIMEOUT_MS = String(s.activationTimeoutMs);
+  process.env.ACTIVATION_POLL_MS = String(s.activationPollMs);
+  process.env.ACTIVATION_SINCE_MS = String(s.activationSinceMs);
+  process.env.SLOT_RESTRICTED_BACKOFF_MIN = String(s.slotRestrictedBackoffMin);
+  process.env.SLOT_LOGIN_CAPTCHA_RETRIES = String(s.slotLoginCaptchaRetries);
+  process.env.SLOT_LOGIN_COOLDOWN_MIN = String(s.slotLoginCooldownMin);
+  process.env.BOOKING_CAPTCHA_AUTOPASS_MS = String(s.captchaAutopassMs);
+  process.env.BOOKING_VERIFY_CAPTCHA_APPEAR_MS = String(
+    s.verifyCaptchaAppearMs,
+  );
+  process.env.BOOKING_CAPTCHA_MEASURE_MS = String(s.captchaMeasureMs);
+  process.env.BOOKING_CDP_PORT = String(s.cdpPort);
+  process.env.BOOKING_CDP_FRESH_PROFILE = s.cdpFreshProfile ? "true" : "false";
+  process.env.BOOKING_CDP_KEEP_CACHE = s.cdpKeepCache ? "true" : "false";
+  process.env.BOOKING_CMS_CACHE = s.cmsCache ? "true" : "false";
+  process.env.BOOKING_ASSET_CACHE = s.assetCache ? "true" : "false";
 }
 
 // Hydrate kesh — har job/poll bazaga urmasin (TTL ichida keshdan beriladi).
@@ -306,3 +440,22 @@ export function maskSettings(s: AppSettings) {
 }
 
 export type MaskedSettings = ReturnType<typeof maskSettings>;
+
+/**
+ * To'liq ko'rinish — maxfiy qiymatlar HAM qaytadi (super login bilan ochilgach,
+ * tokenlar ochiq ko'rinsin — boshqaruv uchun). FAQAT super-admin tasdiqlangach
+ * (action:"verify" / saqlash javobida) ishlatiladi, oddiy GET'da emas.
+ */
+export function fullSettings(s: AppSettings) {
+  const { updatedAt, ...rest } = s;
+  return {
+    ...rest,
+    updatedAt: updatedAt instanceof Date ? updatedAt.toISOString() : updatedAt,
+    hasProxyPass: Boolean(s.proxyPass),
+    hasTelegramBotToken: Boolean(s.telegramBotToken),
+    hasImapPassword: Boolean(s.imapPassword),
+    hasSlotMonitorPassword: Boolean(s.slotMonitorPassword),
+  };
+}
+
+export type FullSettings = ReturnType<typeof fullSettings>;

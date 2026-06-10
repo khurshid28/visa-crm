@@ -4,6 +4,7 @@ import {
   getAppSettings,
   updateAppSettings,
   maskSettings,
+  fullSettings,
   loadSettingsIntoEnv,
   type SettingsPatch,
 } from "@/lib/settings";
@@ -38,10 +39,11 @@ export async function POST(req: NextRequest) {
   }
 
   // Faqat ochish (unlock) uchun tekshiruv — sozlamalarni ko'rsatish.
+  // Super login tasdiqlangani uchun TO'LIQ qiymatlar (tokenlar ochiq) qaytadi.
   if (body.action === "verify") {
     await loadSettingsIntoEnv();
     const s = await getAppSettings();
-    return NextResponse.json({ ok: true, settings: maskSettings(s) });
+    return NextResponse.json({ ok: true, settings: fullSettings(s) });
   }
 
   const patch: SettingsPatch = {};
@@ -139,6 +141,45 @@ export async function POST(req: NextRequest) {
   setBool("slotNotifyTelegram", body.slotNotifyTelegram);
   setBool("slotCheckProxy", body.slotCheckProxy);
 
+  // --- v3: web slot-check matnlari ---
+  setStr("bookingSlotUrl", body.bookingSlotUrl);
+  setStr("bookingSlotOpenText", body.bookingSlotOpenText);
+  setStr("bookingSlotClosedText", body.bookingSlotClosedText);
+
+  // --- v3: VFS kalendar tanlovlari ---
+  setStr("calendarCentre", body.calendarCentre);
+  setStr("calendarCategory", body.calendarCategory);
+  setStr("calendarSubcategory", body.calendarSubcategory);
+  setStr("calendarNoSlotText", body.calendarNoSlotText);
+  setStr("continueText", body.continueText);
+  setNum("calendarReadyMs", body.calendarReadyMs, 1000, 120000);
+
+  // --- v3: aktivatsiya xati ---
+  setStr("activationFrom", body.activationFrom);
+  setNum("activationTimeoutMs", body.activationTimeoutMs, 10000, 1800000);
+  setNum("activationPollMs", body.activationPollMs, 1000, 60000);
+  setNum("activationSinceMs", body.activationSinceMs, 60000, 86400000);
+
+  // --- v3: slot login / backoff ---
+  setNum("slotRestrictedBackoffMin", body.slotRestrictedBackoffMin, 1, 4320);
+  setNum("slotLoginCaptchaRetries", body.slotLoginCaptchaRetries, 1, 10);
+  setNum("slotLoginCooldownMin", body.slotLoginCooldownMin, 0, 1440);
+
+  // --- v3: captcha vaqtlari ---
+  setNum("captchaAutopassMs", body.captchaAutopassMs, 100, 30000);
+  setNum("verifyCaptchaAppearMs", body.verifyCaptchaAppearMs, 500, 60000);
+  setNum("captchaMeasureMs", body.captchaMeasureMs, 1000, 60000);
+
+  // --- v3: brauzer (qo'shimcha) ---
+  setStr("userAgent", body.userAgent);
+  setStr("viewport", body.viewport);
+  setNum("cdpPort", body.cdpPort, 1, 65535);
+  setStr("chromePath", body.chromePath);
+  setBool("cdpFreshProfile", body.cdpFreshProfile);
+  setBool("cdpKeepCache", body.cdpKeepCache);
+  setBool("cmsCache", body.cmsCache);
+  setBool("assetCache", body.assetCache);
+
   const s = await updateAppSettings(patch, superUser);
-  return NextResponse.json({ ok: true, settings: maskSettings(s) });
+  return NextResponse.json({ ok: true, settings: fullSettings(s) });
 }

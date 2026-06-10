@@ -19,9 +19,15 @@ import {
   Personalcard,
   Calendar,
   Key,
+  SearchStatus1,
+  TaskSquare,
+  MessageText1,
+  Clock,
+  Activity,
+  Code,
 } from "iconsax-react";
 import { useToast } from "@/components/Toast";
-import type { MaskedSettings } from "@/lib/settings";
+import type { FullSettings } from "@/lib/settings";
 
 // Kichik toggle (yoqilgan/o'chirilgan) tugmasi.
 function Toggle({
@@ -134,40 +140,35 @@ function Field({
 const inputCls =
   "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-brand-500/20";
 
-// Maxfiy maydon (parol/token) — ko'rsatish tugmasi va "saqlangan" ko'rsatkichi bilan.
-function SecretField({
+// Maxfiy maydon (parol/token) — super login bilan kirilgani uchun qiymat OCHIQ
+// ko'rsatiladi (boshqaruv uchun). Ko'z tugmasi bilan yashirish mumkin.
+function RevealField({
   label,
+  hint,
   value,
   onChange,
   show,
   onToggle,
-  saved,
   placeholder,
 }: {
   label: string;
+  hint?: string;
   value: string;
   onChange: (v: string) => void;
   show: boolean;
   onToggle: () => void;
-  saved: boolean;
-  placeholder: string;
+  placeholder?: string;
 }) {
   return (
-    <Field
-      label={label}
-      hint={
-        saved
-          ? "Saqlangan. O'zgartirish uchun yangi qiymat kiriting."
-          : "Hali kiritilmagan."
-      }
-    >
+    <Field label={label} hint={hint}>
       <div className="relative">
         <input
           type={show ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={saved ? "•••••••• (saqlangan)" : placeholder}
+          placeholder={placeholder}
           autoComplete="new-password"
+          spellCheck={false}
           className={inputCls + " pr-10"}
         />
         <button
@@ -188,25 +189,20 @@ export default function SettingsManager() {
 
   const [unlocked, setUnlocked] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
-  const [form, setForm] = useState<MaskedSettings | null>(null);
+  const [form, setForm] = useState<FullSettings | null>(null);
   const [superUsername, setSuperUsername] = useState("");
   const [superPassword, setSuperPassword] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Yangi maxfiy qiymatlar (bo'sh = tegmaymiz, eski saqlanadi).
-  const [proxyPass, setProxyPass] = useState("");
-  const [telegramBotToken, setTelegramBotToken] = useState("");
-  const [imapPassword, setImapPassword] = useState("");
-  const [slotMonitorPassword, setSlotMonitorPassword] = useState("");
-  const [showProxyPass, setShowProxyPass] = useState(false);
-  const [showBotToken, setShowBotToken] = useState(false);
-  const [showImapPass, setShowImapPass] = useState(false);
-  const [showSlotPass, setShowSlotPass] = useState(false);
+  // Maxfiy qiymatlar OCHIQ ko'rsatiladi (super login bilan kirilgan) — ko'z
+  // tugmasi bilan istalgancha yashirish mumkin.
+  const [showProxyPass, setShowProxyPass] = useState(true);
+  const [showBotToken, setShowBotToken] = useState(true);
+  const [showImapPass, setShowImapPass] = useState(true);
+  const [showSlotPass, setShowSlotPass] = useState(true);
 
-  const set = <K extends keyof MaskedSettings>(
-    key: K,
-    value: MaskedSettings[K],
-  ) => setForm((f) => (f ? { ...f, [key]: value } : f));
+  const set = <K extends keyof FullSettings>(key: K, value: FullSettings[K]) =>
+    setForm((f) => (f ? { ...f, [key]: value } : f));
 
   const num = (v: string): number => {
     const n = Number(v);
@@ -235,7 +231,7 @@ export default function SettingsManager() {
         toast(data?.error || "Login yoki parol noto'g'ri", "error");
         return;
       }
-      setForm(data.settings as MaskedSettings);
+      setForm(data.settings as FullSettings);
       setUnlocked(true);
     } catch {
       toast("Ulanishda xatolik", "error");
@@ -248,61 +244,9 @@ export default function SettingsManager() {
     if (!form) return;
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = {
-        superUsername,
-        superPassword,
-        // Proksi
-        proxyEnabled: form.proxyEnabled,
-        proxyHost: form.proxyHost,
-        proxyPort: form.proxyPort,
-        proxyUser: form.proxyUser,
-        proxyCountries: form.proxyCountries,
-        proxyLogIp: form.proxyLogIp,
-        proxySessionTtlMin: form.proxySessionTtlMin,
-        // Chrome / brauzer
-        chromeHeadless: form.chromeHeadless,
-        chromeCdp: form.chromeCdp,
-        osClick: form.osClick,
-        blockResources: form.blockResources,
-        typeDelayMs: form.typeDelayMs,
-        // Vaqt chegaralari / urinishlar
-        captchaTimeoutMs: form.captchaTimeoutMs,
-        cfChallengeTimeoutMs: form.cfChallengeTimeoutMs,
-        maxAttempts: form.maxAttempts,
-        ipRetries: form.ipRetries,
-        workerPerCpu: form.workerPerCpu,
-        registerTtlHours: form.registerTtlHours,
-        // VFS URL'lari
-        registerUrl: form.registerUrl,
-        loginUrl: form.loginUrl,
-        orderUrl: form.orderUrl,
-        calendarUrl: form.calendarUrl,
-        warmupUrl: form.warmupUrl,
-        // Email / domen
-        emailDomain: form.emailDomain,
-        // Telegram
-        telegramAdminChatIds: form.telegramAdminChatIds,
-        // Gmail / IMAP
-        imapHost: form.imapHost,
-        imapPort: form.imapPort,
-        imapUser: form.imapUser,
-        imapMailbox: form.imapMailbox,
-        imapSecure: form.imapSecure,
-        // VFS slot-monitor akkaunti
-        slotMonitorEmail: form.slotMonitorEmail,
-        // Slot-worker
-        slotWorkerIntervalMs: form.slotWorkerIntervalMs,
-        slotWorkerConcurrency: form.slotWorkerConcurrency,
-        slotNotifyTelegram: form.slotNotifyTelegram,
-        slotCheckProxy: form.slotCheckProxy,
-      };
-      // Maxfiy maydonlar — faqat yangi qiymat kiritilganda yuboriladi.
-      if (proxyPass.length > 0) payload.proxyPass = proxyPass;
-      if (telegramBotToken.length > 0)
-        payload.telegramBotToken = telegramBotToken;
-      if (imapPassword.length > 0) payload.imapPassword = imapPassword;
-      if (slotMonitorPassword.length > 0)
-        payload.slotMonitorPassword = slotMonitorPassword;
+      // Butun forma + super login yuboriladi (maxfiy qiymatlar ham — ular
+      // ochiq ko'rsatilgan). Server faqat o'zi tanigan maydonlarni qabul qiladi.
+      const payload = { ...form, superUsername, superPassword };
 
       const res = await fetch("/api/settings", {
         method: "POST",
@@ -315,11 +259,7 @@ export default function SettingsManager() {
         return;
       }
       if (data?.settings) {
-        setForm(data.settings as MaskedSettings);
-        setProxyPass("");
-        setTelegramBotToken("");
-        setImapPassword("");
-        setSlotMonitorPassword("");
+        setForm(data.settings as FullSettings);
       }
       toast("Sozlamalar saqlandi");
       router.refresh();
@@ -393,8 +333,8 @@ export default function SettingsManager() {
     : null;
 
   return (
-    <div className="space-y-5 pb-24">
-      <div className="flex items-start justify-between gap-3">
+    <div className="pb-24">
+      <div className="mb-5 flex items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">
             Sozlamalar
@@ -420,6 +360,8 @@ export default function SettingsManager() {
         </button>
       </div>
 
+      {/* Barcha kartalar — to'liq enli masonry (ustunlarga taqsimlanadi) */}
+      <div className="columns-1 gap-5 lg:columns-2 2xl:columns-3 [&>section]:mb-5 [&>section]:break-inside-avoid">
       {/* --- PROKSI --- */}
       <Card
         icon={Global}
@@ -478,13 +420,13 @@ export default function SettingsManager() {
                 className={inputCls}
               />
             </Field>
-            <SecretField
+            <RevealField
               label="Parol"
-              value={proxyPass}
-              onChange={setProxyPass}
+              hint="Proksi paroli (ochiq ko'rsatilgan)."
+              value={form.proxyPass}
+              onChange={(v) => set("proxyPass", v)}
               show={showProxyPass}
               onToggle={() => setShowProxyPass((s) => !s)}
-              saved={form.hasProxyPass}
               placeholder="proksi parol"
             />
           </div>
@@ -613,13 +555,13 @@ export default function SettingsManager() {
         title="Telegram bot"
         desc="Bildirishnomalar yuboriladigan bot va admin chat ID'lari."
       >
-        <SecretField
+        <RevealField
           label="Bot token"
-          value={telegramBotToken}
-          onChange={setTelegramBotToken}
+          hint="Telegram bot tokeni (ochiq ko'rsatilgan)."
+          value={form.telegramBotToken}
+          onChange={(v) => set("telegramBotToken", v)}
           show={showBotToken}
           onToggle={() => setShowBotToken((s) => !s)}
-          saved={form.hasTelegramBotToken}
           placeholder="123456:ABC-DEF..."
         />
         <Field
@@ -673,13 +615,13 @@ export default function SettingsManager() {
               className={inputCls}
             />
           </Field>
-          <SecretField
+          <RevealField
             label="Parol (app password)"
-            value={imapPassword}
-            onChange={setImapPassword}
+            hint="Gmail App Password (ochiq ko'rsatilgan)."
+            value={form.imapPassword}
+            onChange={(v) => set("imapPassword", v)}
             show={showImapPass}
             onToggle={() => setShowImapPass((s) => !s)}
-            saved={form.hasImapPassword}
             placeholder="Gmail app password"
           />
         </div>
@@ -725,26 +667,24 @@ export default function SettingsManager() {
               className={inputCls}
             />
           </Field>
-          <SecretField
+          <RevealField
             label="Parol"
-            value={slotMonitorPassword}
-            onChange={setSlotMonitorPassword}
+            hint="VFS akkaunt paroli (ochiq ko'rsatilgan)."
+            value={form.slotMonitorPassword}
+            onChange={(v) => set("slotMonitorPassword", v)}
             show={showSlotPass}
             onToggle={() => setShowSlotPass((s) => !s)}
-            saved={form.hasSlotMonitorPassword}
             placeholder="VFS akkaunt paroli"
           />
         </div>
       </Card>
 
-      {/* --- CHROME + WORKER (yonma-yon) --- */}
-      <div className="grid items-start gap-5 lg:grid-cols-2">
-        {/* --- CHROME / BRAUZER --- */}
-        <Card
-          icon={Monitor}
-          title="Chrome / brauzer"
-          desc="Worker brauzeri qanday ishlashini sozlash."
-        >
+      {/* --- CHROME / BRAUZER --- */}
+      <Card
+        icon={Monitor}
+        title="Chrome / brauzer"
+        desc="Worker brauzeri qanday ishlashini sozlash."
+      >
           <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
             <div>
               <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
@@ -818,8 +758,7 @@ export default function SettingsManager() {
             O'zgartirish ishlab turgan worker-pool'ga ~10 soniyada yetib boradi.
             Worker sonini sezilarli o'zgartirsangiz, poolni qayta ishga tushiring.
           </div>
-        </Card>
-      </div>
+      </Card>
 
       {/* --- TIMEOUT'LAR --- */}
       <Card
@@ -951,6 +890,335 @@ export default function SettingsManager() {
           onChange={(v) => set("slotCheckProxy", v)}
         />
       </Card>
+
+      {/* --- WEB SLOT-CHECK MATNLARI --- */}
+      <Card
+        icon={SearchStatus1}
+        title="Web slot-check matnlari"
+        desc="Oddiy sahifada slot ochiq/yopiqligini aniqlovchi matnlar (| bilan)."
+      >
+        <Field
+          label="Slot sahifa URL"
+          hint="Slot holati ko'rsatiladigan sahifa."
+        >
+          <input
+            value={form.bookingSlotUrl}
+            onChange={(e) => set("bookingSlotUrl", e.target.value)}
+            placeholder="https://example.com/slots"
+            className={inputCls}
+          />
+        </Field>
+        <Field
+          label="Ochiq slot matnlari"
+          hint="Shu matn(lar) bo'lsa = slot OCHIQ. | bilan ajrating."
+        >
+          <input
+            value={form.bookingSlotOpenText}
+            onChange={(e) => set("bookingSlotOpenText", e.target.value)}
+            placeholder="available|book now|select slot"
+            className={inputCls}
+          />
+        </Field>
+        <Field
+          label="Yopiq slot matnlari"
+          hint="Shu matn(lar) bo'lsa = slot YOPIQ. | bilan ajrating."
+        >
+          <input
+            value={form.bookingSlotClosedText}
+            onChange={(e) => set("bookingSlotClosedText", e.target.value)}
+            placeholder="no appointment|fully booked|closed"
+            className={inputCls}
+          />
+        </Field>
+      </Card>
+
+      {/* --- VFS KALENDAR TANLOVLARI --- */}
+      <Card
+        icon={TaskSquare}
+        title="VFS kalendar tanlovlari"
+        desc="Kalendar tekshiruvida tanlanadigan markaz/kategoriya va slot matnlari."
+      >
+        <Field label="Markaz (centre)" hint="BOOKING_CALENDAR_CENTRE">
+          <input
+            value={form.calendarCentre}
+            onChange={(e) => set("calendarCentre", e.target.value)}
+            placeholder="VFS GLOBAL SERVICES ..."
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Kategoriya (category)" hint="BOOKING_CALENDAR_CATEGORY">
+          <input
+            value={form.calendarCategory}
+            onChange={(e) => set("calendarCategory", e.target.value)}
+            placeholder="Latvia Long Stay/Visa D"
+            className={inputCls}
+          />
+        </Field>
+        <Field
+          label="Sub-kategoriya (subcategory)"
+          hint="BOOKING_CALENDAR_SUBCATEGORY"
+        >
+          <input
+            value={form.calendarSubcategory}
+            onChange={(e) => set("calendarSubcategory", e.target.value)}
+            placeholder="Cargo drivers (Visa D) ..."
+            className={inputCls}
+          />
+        </Field>
+        <Field
+          label="Bo'sh slot yo'q matni"
+          hint="Sahifada shu matn bo'lsa = YOPIQ. | bilan ajrating."
+        >
+          <input
+            value={form.calendarNoSlotText}
+            onChange={(e) => set("calendarNoSlotText", e.target.value)}
+            placeholder="no appointment slots are currently available"
+            className={inputCls}
+          />
+        </Field>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Continue tugma matni" hint="Faol bo'lsa = slot bor.">
+            <input
+              value={form.continueText}
+              onChange={(e) => set("continueText", e.target.value)}
+              placeholder="Continue"
+              className={inputCls}
+            />
+          </Field>
+          <Field
+            label="Sahifa render kutish (soniya)"
+            hint="SPA yuklanishini kutish (1-120)."
+          >
+            <input
+              type="number"
+              min={1}
+              max={120}
+              value={Math.round(form.calendarReadyMs / 1000)}
+              onChange={(e) =>
+                set("calendarReadyMs", num(e.target.value) * 1000)
+              }
+              className={inputCls}
+            />
+          </Field>
+        </div>
+      </Card>
+
+      {/* --- AKTIVATSIYA XATI --- */}
+      <Card
+        icon={MessageText1}
+        title="Aktivatsiya xati (IMAP)"
+        desc="Ro'yxatdan o'tgach keladigan tasdiqlash xatini kutish sozlamalari."
+      >
+        <Field
+          label="Jo'natuvchi(lar)"
+          hint="Aktivatsiya xati jo'natuvchisi. | bilan ajrating."
+        >
+          <input
+            value={form.activationFrom}
+            onChange={(e) => set("activationFrom", e.target.value)}
+            placeholder="vfsglobal.com|donotreply"
+            className={inputCls}
+          />
+        </Field>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Field label="Kutish (soniya)" hint="Jami (10-1800)">
+            <input
+              type="number"
+              min={10}
+              max={1800}
+              value={Math.round(form.activationTimeoutMs / 1000)}
+              onChange={(e) =>
+                set("activationTimeoutMs", num(e.target.value) * 1000)
+              }
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Oraliq (soniya)" hint="1-60">
+            <input
+              type="number"
+              min={1}
+              max={60}
+              value={Math.round(form.activationPollMs / 1000)}
+              onChange={(e) =>
+                set("activationPollMs", num(e.target.value) * 1000)
+              }
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Oldingacha (daqiqa)" hint="1-1440">
+            <input
+              type="number"
+              min={1}
+              max={1440}
+              value={Math.round(form.activationSinceMs / 60000)}
+              onChange={(e) =>
+                set("activationSinceMs", num(e.target.value) * 60000)
+              }
+              className={inputCls}
+            />
+          </Field>
+        </div>
+      </Card>
+
+      {/* --- SLOT LOGIN / BACKOFF --- */}
+      <Card
+        icon={Clock}
+        title="Slot login va backoff"
+        desc="Kalendar akkaunti login urinishlari va bloklanishdan keyingi kutish."
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Field
+            label="Blok backoff (daqiqa)"
+            hint="429 blok bo'lsa (1-4320)."
+          >
+            <input
+              type="number"
+              min={1}
+              max={4320}
+              value={form.slotRestrictedBackoffMin}
+              onChange={(e) =>
+                set("slotRestrictedBackoffMin", num(e.target.value))
+              }
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Login captcha urinish" hint="1-10">
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={form.slotLoginCaptchaRetries}
+              onChange={(e) =>
+                set("slotLoginCaptchaRetries", num(e.target.value))
+              }
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Login cooldown (daqiqa)" hint="0-1440">
+            <input
+              type="number"
+              min={0}
+              max={1440}
+              value={form.slotLoginCooldownMin}
+              onChange={(e) =>
+                set("slotLoginCooldownMin", num(e.target.value))
+              }
+              className={inputCls}
+            />
+          </Field>
+        </div>
+      </Card>
+
+      {/* --- CAPTCHA VAQTLARI (qo'shimcha) --- */}
+      <Card
+        icon={Activity}
+        title="Captcha vaqtlari (qo'shimcha)"
+        desc="Turnstile auto-pass / OS-klik bilan bog'liq nozik vaqtlar (ms)."
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Field label="Auto-pass (ms)" hint="100-30000">
+            <input
+              type="number"
+              min={100}
+              max={30000}
+              value={form.captchaAutopassMs}
+              onChange={(e) => set("captchaAutopassMs", num(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Verify paydo (ms)" hint="500-60000">
+            <input
+              type="number"
+              min={500}
+              max={60000}
+              value={form.verifyCaptchaAppearMs}
+              onChange={(e) =>
+                set("verifyCaptchaAppearMs", num(e.target.value))
+              }
+              className={inputCls}
+            />
+          </Field>
+          <Field label="O'lchash (ms)" hint="1000-60000">
+            <input
+              type="number"
+              min={1000}
+              max={60000}
+              value={form.captchaMeasureMs}
+              onChange={(e) => set("captchaMeasureMs", num(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
+        </div>
+      </Card>
+
+      {/* --- BRAUZER (qo'shimcha) --- */}
+      <Card
+        icon={Code}
+        title="Brauzer (qo'shimcha)"
+        desc="Fingerprint, Chrome yo'li va cache (tajribali foydalanuvchi uchun)."
+      >
+        <Field label="User-Agent" hint="Bo'sh = avtomatik (real Chrome).">
+          <input
+            value={form.userAgent}
+            onChange={(e) => set("userAgent", e.target.value)}
+            placeholder="Mozilla/5.0 ..."
+            className={inputCls}
+          />
+        </Field>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Viewport" hint="Masalan: 1366x768">
+            <input
+              value={form.viewport}
+              onChange={(e) => set("viewport", e.target.value)}
+              placeholder="1366x768"
+              className={inputCls}
+            />
+          </Field>
+          <Field label="CDP port" hint="1-65535">
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={form.cdpPort}
+              onChange={(e) => set("cdpPort", num(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
+        </div>
+        <Field label="Chrome yo'li (path)" hint="Bo'sh = ichki Chromium.">
+          <input
+            value={form.chromePath}
+            onChange={(e) => set("chromePath", e.target.value)}
+            placeholder="C:/.../chrome.exe"
+            className={inputCls}
+          />
+        </Field>
+        <ToggleRow
+          title="Toza profil (fresh)"
+          desc="Har ishda sessiya/cookie tozalanadi."
+          on={form.cdpFreshProfile}
+          onChange={(v) => set("cdpFreshProfile", v)}
+        />
+        <ToggleRow
+          title="Cache saqlash"
+          desc="HTTP cache (JS bundle) saqlanadi - tezroq."
+          on={form.cdpKeepCache}
+          onChange={(v) => set("cdpKeepCache", v)}
+        />
+        <ToggleRow
+          title="CMS cache"
+          desc="Contentful matn javoblari diskda saqlanadi."
+          on={form.cmsCache}
+          onChange={(v) => set("cmsCache", v)}
+        />
+        <ToggleRow
+          title="Asset cache"
+          desc="Versiyalangan JS/CSS diskda saqlanadi."
+          on={form.assetCache}
+          onChange={(v) => set("assetCache", v)}
+        />
+      </Card>
+      </div>
 
       {/* --- SAQLASH --- */}
       <div className="sticky bottom-4 z-10 flex items-center justify-end gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-900/90">

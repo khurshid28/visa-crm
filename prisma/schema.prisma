@@ -536,6 +536,46 @@ model AppSettings {
   proxySessionTtlMin Int     @default(60) // PROXY_SESSION_TTL_MIN
   typeDelayMs        Int     @default(35) // BOOKING_TYPE_DELAY_MS
 
+  // ====== v3 — qo'shimcha boshqaruv maydonlari (controlling uchun) ======
+  // --- Web slot-check matnlari (BOOKING_SLOT_*) ---
+  bookingSlotUrl        String @default("") // BOOKING_SLOT_URL — slot holati sahifasi
+  bookingSlotOpenText   String @default("available|book now|select slot") // BOOKING_SLOT_OPEN_TEXT (| bilan)
+  bookingSlotClosedText String @default("no appointment|fully booked|closed") // BOOKING_SLOT_CLOSED_TEXT (| bilan)
+
+  // --- VFS kalendar tanlovlari (BOOKING_CALENDAR_*) ---
+  calendarCentre      String @default("") // BOOKING_CALENDAR_CENTRE
+  calendarCategory    String @default("") // BOOKING_CALENDAR_CATEGORY
+  calendarSubcategory String @default("") // BOOKING_CALENDAR_SUBCATEGORY
+  calendarNoSlotText  String @default("") // BOOKING_CALENDAR_NO_SLOT_TEXT (| bilan)
+  continueText        String @default("Continue") // BOOKING_CONTINUE_TEXT
+  calendarReadyMs     Int    @default(30000) // BOOKING_CALENDAR_READY_MS — SPA render kutish
+
+  // --- Aktivatsiya xati (ACTIVATION_*) ---
+  activationFrom      String @default("") // ACTIVATION_FROM (| bilan jo'natuvchilar)
+  activationTimeoutMs Int    @default(180000) // ACTIVATION_TIMEOUT_MS — xat kutish (jami)
+  activationPollMs    Int    @default(4000) // ACTIVATION_POLL_MS — tekshirish oralig'i
+  activationSinceMs   Int    @default(1800000) // ACTIVATION_SINCE_MS — qancha oldingacha qarash
+
+  // --- Slot login / backoff (SLOT_*) ---
+  slotRestrictedBackoffMin Int @default(720) // SLOT_RESTRICTED_BACKOFF_MIN — blok bo'lsa backoff (daqiqa)
+  slotLoginCaptchaRetries  Int @default(3) // SLOT_LOGIN_CAPTCHA_RETRIES
+  slotLoginCooldownMin     Int @default(30) // SLOT_LOGIN_COOLDOWN_MIN
+
+  // --- Captcha vaqtlari (BOOKING_*) ---
+  captchaAutopassMs     Int @default(800) // BOOKING_CAPTCHA_AUTOPASS_MS
+  verifyCaptchaAppearMs Int @default(4000) // BOOKING_VERIFY_CAPTCHA_APPEAR_MS
+  captchaMeasureMs      Int @default(18000) // BOOKING_CAPTCHA_MEASURE_MS
+
+  // --- Brauzer (qo'shimcha) ---
+  userAgent       String  @default("") // BOOKING_USER_AGENT
+  viewport        String  @default("1366x768") // BOOKING_VIEWPORT
+  cdpPort         Int     @default(9222) // BOOKING_CDP_PORT
+  chromePath      String  @default("") // BOOKING_CHROME_PATH
+  cdpFreshProfile Boolean @default(true) // BOOKING_CDP_FRESH_PROFILE
+  cdpKeepCache    Boolean @default(true) // BOOKING_CDP_KEEP_CACHE
+  cmsCache        Boolean @default(true) // BOOKING_CMS_CACHE
+  assetCache      Boolean @default(true) // BOOKING_ASSET_CACHE
+
   // Migratsiya versiyasi: yangi ustunlar .env'dan BIR MARTA to'ldiriladi
   // (eski singleton yozuv yangi maydonlarni bo'sh ko'rsatmasligi uchun).
   configVersion Int @default(1)
