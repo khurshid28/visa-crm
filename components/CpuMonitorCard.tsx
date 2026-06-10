@@ -11,6 +11,8 @@ import {
   Monitor,
   Box,
   Clock,
+  Flash,
+  Code,
 } from "iconsax-react";
 
 type ServerInfo = {
@@ -19,8 +21,11 @@ type ServerInfo = {
   osRelease: string;
   arch: string;
   cpuModel: string;
+  cpuSpeed: number;
   cores: number;
   memTotal: number;
+  memFree: number;
+  nodeVersion: string;
   uptimeSec: number;
 };
 
@@ -54,6 +59,12 @@ function fmtUptime(sec: number): string {
   if (h) parts.push(`${h} soat`);
   if (m || parts.length === 0) parts.push(`${m} daqiqa`);
   return parts.join(" ");
+}
+
+// Protsessor tezligini qulay ko'rinishga keltiradi (MHz → GHz).
+function fmtSpeed(mhz: number): string {
+  if (!Number.isFinite(mhz) || mhz <= 0) return "—";
+  return mhz >= 1000 ? `${(mhz / 1000).toFixed(1)} GHz` : `${mhz} MHz`;
 }
 
 // Daraja bo'yicha rang palitrasi.
@@ -287,9 +298,26 @@ export default function CpuMonitorCard() {
               sub={`${stat.server.cores} yadro`}
             />
             <ServerTile
+              icon={Flash}
+              label="Protsessor tezligi"
+              value={fmtSpeed(stat.server.cpuSpeed)}
+              sub={`${stat.server.cores} yadro`}
+            />
+            <ServerTile
               icon={Box}
               label="Umumiy xotira (RAM)"
               value={`${fmtGB(stat.server.memTotal)} GB`}
+            />
+            <ServerTile
+              icon={Health}
+              label="Bo'sh xotira (RAM)"
+              value={`${fmtGB(stat.server.memFree)} GB`}
+              sub={`band ${fmtGB(stat.server.memTotal - stat.server.memFree)} GB`}
+            />
+            <ServerTile
+              icon={Code}
+              label="Node.js"
+              value={stat.server.nodeVersion}
             />
             <ServerTile
               icon={Clock}

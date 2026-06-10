@@ -233,6 +233,54 @@ export function loadVfsOptions(profileKey: string): VfsOptionsFile | null {
   }
 }
 
+/**
+ * BARCHA profillardagi VFS dropdown variantlarini (centre/category/subCategory)
+ * o'qib, birlashtiradi (web forma — Sozlamalardagi dropdownlar uchun). Hech bir
+ * fayl bo'lmasa bo'sh ro'yxatlar qaytadi. Brauzersiz (toza Node) ishlaydi.
+ */
+export function loadAllVfsOptions(): {
+  centre: string[];
+  category: string[];
+  subCategory: string[];
+} {
+  const out = {
+    centre: [] as string[],
+    category: [] as string[],
+    subCategory: [] as string[],
+  };
+  try {
+    const base = slotMonitorProfileBase();
+    if (!fs.existsSync(base)) return out;
+    const seen = {
+      centre: new Set<string>(),
+      category: new Set<string>(),
+      subCategory: new Set<string>(),
+    };
+    for (const f of fs.readdirSync(base)) {
+      if (!/^vfs-options-.*\.json$/.test(f)) continue;
+      try {
+        const data = JSON.parse(
+          fs.readFileSync(path.join(base, f), "utf8"),
+        ) as Partial<VfsOptionsFile>;
+        for (const key of ["centre", "category", "subCategory"] as const) {
+          for (const v of data[key] || []) {
+            const t = (v || "").trim();
+            if (t && !seen[key].has(t)) {
+              seen[key].add(t);
+              out[key].push(t);
+            }
+          }
+        }
+      } catch {
+        /* buzuq fayl — o'tkazib yuboramiz */
+      }
+    }
+  } catch {
+    /* muhim emas — bo'sh ro'yxat qaytadi */
+  }
+  return out;
+}
+
 // ====================================================================
 //  429001 BACKOFF MARKER (akkaunt vaqtincha bloklangan)
 // ====================================================================

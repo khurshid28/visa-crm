@@ -20,7 +20,6 @@ import {
 } from "@/components/DashboardCharts";
 import StatusBadge from "@/components/StatusBadge";
 import PeriodFilter from "@/components/PeriodFilter";
-import SiteCheckPanel from "@/components/SiteCheckPanel";
 import { fmtDate } from "@/lib/date";
 
 export const dynamic = "force-dynamic";
@@ -317,9 +316,6 @@ export default async function DashboardPage({
           accent
         />
       </div>
-
-      {/* Saytni qo'lda tekshirish (VFS diagnostika) */}
-      <SiteCheckPanel />
 
       {/* Charts */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

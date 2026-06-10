@@ -64,8 +64,11 @@ export type ServerInfo = {
   osRelease: string; // OS versiyasi (os.release())
   arch: string; // arxitektura: x64 / arm64 ...
   cpuModel: string; // protsessor modeli (1-yadro nomi)
+  cpuSpeed: number; // protsessor tezligi (MHz)
   cores: number; // mantiqiy yadrolar soni
   memTotal: number; // umumiy operativ xotira (bayt)
+  memFree: number; // bo'sh operativ xotira (bayt)
+  nodeVersion: string; // Node.js versiyasi (process.version)
   uptimeSec: number; // server ishlab turgan vaqt (soniya)
 };
 
@@ -86,8 +89,11 @@ export function getServerInfo(): ServerInfo {
     osRelease: os.release() || "",
     arch: os.arch() || "",
     cpuModel: (cpus[0]?.model || "—").trim(),
+    cpuSpeed: cpus[0]?.speed || 0,
     cores: cpus.length || 1,
     memTotal: os.totalmem(),
+    memFree: os.freemem(),
+    nodeVersion: process.version || "—",
     uptimeSec: Math.round(os.uptime()),
   };
 }

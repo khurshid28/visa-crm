@@ -28,6 +28,7 @@ import {
 } from "iconsax-react";
 import { useToast } from "@/components/Toast";
 import type { FullSettings } from "@/lib/settings";
+import Select from "@/components/Select";
 
 // Kichik toggle (yoqilgan/o'chirilgan) tugmasi.
 function Toggle({
@@ -201,6 +202,13 @@ export default function SettingsManager() {
   const [showImapPass, setShowImapPass] = useState(true);
   const [showSlotPass, setShowSlotPass] = useState(true);
 
+  // VFS kalendar dropdownlari uchun variantlar (serverdan: saqlangan + standart).
+  const [vfsOptions, setVfsOptions] = useState<{
+    centre: string[];
+    category: string[];
+    subCategory: string[];
+  }>({ centre: [], category: [], subCategory: [] });
+
   const set = <K extends keyof FullSettings>(key: K, value: FullSettings[K]) =>
     setForm((f) => (f ? { ...f, [key]: value } : f));
 
@@ -232,6 +240,7 @@ export default function SettingsManager() {
         return;
       }
       setForm(data.settings as FullSettings);
+      if (data.vfsOptions) setVfsOptions(data.vfsOptions);
       setUnlocked(true);
     } catch {
       toast("Ulanishda xatolik", "error");
@@ -261,6 +270,7 @@ export default function SettingsManager() {
       if (data?.settings) {
         setForm(data.settings as FullSettings);
       }
+      if (data?.vfsOptions) setVfsOptions(data.vfsOptions);
       toast("Sozlamalar saqlandi");
       router.refresh();
     } catch {
@@ -470,6 +480,45 @@ export default function SettingsManager() {
               />
             </div>
           </div>
+          <Field
+            label="Foydalanuvchi shabloni"
+            hint="PROXY_USERNAME_TEMPLATE — {user}{pass}{country}{session}{ttl} almashtiriladi."
+          >
+            <input
+              value={form.proxyUsernameTemplate}
+              onChange={(e) => set("proxyUsernameTemplate", e.target.value)}
+              placeholder="{user}"
+              autoComplete="off"
+              spellCheck={false}
+              className={inputCls}
+            />
+          </Field>
+          <Field
+            label="Parol shabloni"
+            hint="PROXY_PASSWORD_TEMPLATE — sticky sessiya/davlat/TTL shu yerda."
+          >
+            <input
+              value={form.proxyPasswordTemplate}
+              onChange={(e) => set("proxyPasswordTemplate", e.target.value)}
+              placeholder="{pass}_country-{country}_session-{session}_lifetime-{ttl}m"
+              autoComplete="off"
+              spellCheck={false}
+              className={inputCls}
+            />
+          </Field>
+          <Field
+            label="Chiqish IP echo URL"
+            hint="PROXY_IP_ECHO_URL — chiqish (exit) IP'ni aniqlash uchun."
+          >
+            <input
+              value={form.proxyIpEchoUrl}
+              onChange={(e) => set("proxyIpEchoUrl", e.target.value)}
+              placeholder="https://api.ipify.org?format=json"
+              autoComplete="off"
+              spellCheck={false}
+              className={inputCls}
+            />
+          </Field>
         </div>
       </Card>
 
@@ -677,6 +726,19 @@ export default function SettingsManager() {
             placeholder="VFS akkaunt paroli"
           />
         </div>
+        <Field
+          label="Profil papkasi"
+          hint="SLOT_MONITOR_PROFILE_DIR — token/sessiya saqlanadigan papka."
+        >
+          <input
+            value={form.slotMonitorProfileDir}
+            onChange={(e) => set("slotMonitorProfileDir", e.target.value)}
+            placeholder="uploads/slot-monitor-profiles"
+            autoComplete="off"
+            spellCheck={false}
+            className={inputCls}
+          />
+        </Field>
       </Card>
 
       {/* --- CHROME / BRAUZER --- */}
@@ -939,30 +1001,33 @@ export default function SettingsManager() {
         desc="Kalendar tekshiruvida tanlanadigan markaz/kategoriya va slot matnlari."
       >
         <Field label="Markaz (centre)" hint="BOOKING_CALENDAR_CENTRE">
-          <input
+          <Select
             value={form.calendarCentre}
-            onChange={(e) => set("calendarCentre", e.target.value)}
-            placeholder="VFS GLOBAL SERVICES ..."
-            className={inputCls}
+            onChange={(v) => set("calendarCentre", v)}
+            options={vfsOptions.centre.map((v) => ({ value: v, label: v }))}
+            placeholder="Markazni tanlang"
+            buttonClassName="dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           />
         </Field>
         <Field label="Kategoriya (category)" hint="BOOKING_CALENDAR_CATEGORY">
-          <input
+          <Select
             value={form.calendarCategory}
-            onChange={(e) => set("calendarCategory", e.target.value)}
-            placeholder="Latvia Long Stay/Visa D"
-            className={inputCls}
+            onChange={(v) => set("calendarCategory", v)}
+            options={vfsOptions.category.map((v) => ({ value: v, label: v }))}
+            placeholder="Kategoriyani tanlang"
+            buttonClassName="dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           />
         </Field>
         <Field
           label="Sub-kategoriya (subcategory)"
           hint="BOOKING_CALENDAR_SUBCATEGORY"
         >
-          <input
+          <Select
             value={form.calendarSubcategory}
-            onChange={(e) => set("calendarSubcategory", e.target.value)}
-            placeholder="Cargo drivers (Visa D) ..."
-            className={inputCls}
+            onChange={(v) => set("calendarSubcategory", v)}
+            options={vfsOptions.subCategory.map((v) => ({ value: v, label: v }))}
+            placeholder="Sub-kategoriyani tanlang"
+            buttonClassName="dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           />
         </Field>
         <Field
@@ -1221,7 +1286,7 @@ export default function SettingsManager() {
       </div>
 
       {/* --- SAQLASH --- */}
-      <div className="sticky bottom-4 z-10 flex items-center justify-end gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-900/90">
+      <div className="sticky bottom-4 z-10 mt-8 flex items-center justify-end gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-900/90">
         <span className="mr-auto flex items-center gap-1.5 text-xs text-slate-400">
           <Lock1 size={13} variant="Bold" />
           Faqat super-admin saqlay oladi

@@ -576,6 +576,12 @@ model AppSettings {
   cmsCache        Boolean @default(true) // BOOKING_CMS_CACHE
   assetCache      Boolean @default(true) // BOOKING_ASSET_CACHE
 
+  // --- v4: proksi shablon / echo URL / profil papka ---
+  proxyUsernameTemplate String @default("{user}") // PROXY_USERNAME_TEMPLATE
+  proxyPasswordTemplate String @default("{pass}_country-{country}_session-{session}_lifetime-{ttl}m") // PROXY_PASSWORD_TEMPLATE
+  proxyIpEchoUrl        String @default("https://api.ipify.org?format=json") // PROXY_IP_ECHO_URL
+  slotMonitorProfileDir String @default("uploads/slot-monitor-profiles") // SLOT_MONITOR_PROFILE_DIR
+
   // Migratsiya versiyasi: yangi ustunlar .env'dan BIR MARTA to'ldiriladi
   // (eski singleton yozuv yangi maydonlarni bo'sh ko'rsatmasligi uchun).
   configVersion Int @default(1)

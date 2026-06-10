@@ -6,11 +6,52 @@ import {
   maskSettings,
   fullSettings,
   loadSettingsIntoEnv,
+  type AppSettings,
   type SettingsPatch,
 } from "@/lib/settings";
+import { loadAllVfsOptions } from "@/lib/automation/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// VFS kalendar dropdownlari uchun variantlar: diskdan o'qilgan (slot-check
+// tekshiruvlarida saqlangan) variantlar + shu missiya uchun ma'lum standartlar
+// + joriy saqlangan qiymat birlashtiriladi (ro'yxat hech qachon bo'sh qolmasin).
+const KNOWN_VFS_OPTIONS = {
+  centre: ["VFS GLOBAL SERVICES UBKN"],
+  category: ["Latvia Long Stay/Visa D"],
+  subCategory: ["Cargo drivers (Visa D) Uzbek, Turkmen"],
+};
+
+function mergeOptions(...lists: string[][]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const list of lists) {
+    for (const v of list) {
+      const t = (v || "").trim();
+      if (t && !seen.has(t)) {
+        seen.add(t);
+        out.push(t);
+      }
+    }
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+function buildVfsOptions(s: AppSettings) {
+  const vfs = loadAllVfsOptions();
+  return {
+    centre: mergeOptions(vfs.centre, KNOWN_VFS_OPTIONS.centre, [
+      s.calendarCentre,
+    ]),
+    category: mergeOptions(vfs.category, KNOWN_VFS_OPTIONS.category, [
+      s.calendarCategory,
+    ]),
+    subCategory: mergeOptions(vfs.subCategory, KNOWN_VFS_OPTIONS.subCategory, [
+      s.calendarSubcategory,
+    ]),
+  };
+}
 
 // GET — joriy sozlamalar (parol MASKALANGAN: faqat hasProxyPass qaytadi).
 // Admin sessiyasi yetarli (middleware tekshiradi) — ko'rish uchun super shart emas.
@@ -43,7 +84,11 @@ export async function POST(req: NextRequest) {
   if (body.action === "verify") {
     await loadSettingsIntoEnv();
     const s = await getAppSettings();
-    return NextResponse.json({ ok: true, settings: fullSettings(s) });
+    return NextResponse.json({
+      ok: true,
+      settings: fullSettings(s),
+      vfsOptions: buildVfsOptions(s),
+    });
   }
 
   const patch: SettingsPatch = {};
@@ -180,6 +225,16 @@ export async function POST(req: NextRequest) {
   setBool("cmsCache", body.cmsCache);
   setBool("assetCache", body.assetCache);
 
+  // --- v4: proksi shablon / echo URL / profil papka ---
+  setStr("proxyUsernameTemplate", body.proxyUsernameTemplate);
+  setStr("proxyPasswordTemplate", body.proxyPasswordTemplate);
+  setStr("proxyIpEchoUrl", body.proxyIpEchoUrl);
+  setStr("slotMonitorProfileDir", body.slotMonitorProfileDir);
+
   const s = await updateAppSettings(patch, superUser);
-  return NextResponse.json({ ok: true, settings: fullSettings(s) });
+  return NextResponse.json({
+    ok: true,
+    settings: fullSettings(s),
+    vfsOptions: buildVfsOptions(s),
+  });
 }

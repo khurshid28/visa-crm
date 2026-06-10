@@ -117,6 +117,12 @@ export type AppSettings = {
   cmsCache: boolean;
   assetCache: boolean;
 
+  // --- v4: proksi shablon / echo URL / profil papka ---
+  proxyUsernameTemplate: string;
+  proxyPasswordTemplate: string;
+  proxyIpEchoUrl: string;
+  slotMonitorProfileDir: string;
+
   configVersion: number;
   updatedAt: Date;
   updatedBy: string | null;
@@ -142,7 +148,8 @@ const ENV_NUM = (v: string | undefined, dflt: number): number => {
 // BIR MARTA to'ldiriladi (eski singleton yozuv bo'sh ko'rsatmasligi uchun).
 // v2 -> v3: ko'proq boshqaruv maydonlari (slot matnlari, kalendar, aktivatsiya,
 // captcha vaqtlari, brauzer) qo'shildi.
-const CONFIG_VERSION = 3;
+// v3 -> v4: proksi shablon/echo URL va slot-monitor profil papkasi qo'shildi.
+const CONFIG_VERSION = 4;
 
 /**
  * 2-versiyada qo'shilgan maydonlarni joriy .env'dan oladi.
@@ -229,9 +236,30 @@ function v3FieldsSeed(): SettingsPatch {
   };
 }
 
+/**
+ * 4-versiyada qo'shilgan maydonlarni joriy .env'dan oladi.
+ */
+function v4FieldsSeed(): SettingsPatch {
+  return {
+    proxyUsernameTemplate: (
+      process.env.PROXY_USERNAME_TEMPLATE || "{user}"
+    ).trim(),
+    proxyPasswordTemplate: (
+      process.env.PROXY_PASSWORD_TEMPLATE ||
+      "{pass}_country-{country}_session-{session}_lifetime-{ttl}m"
+    ).trim(),
+    proxyIpEchoUrl: (
+      process.env.PROXY_IP_ECHO_URL || "https://api.ipify.org?format=json"
+    ).trim(),
+    slotMonitorProfileDir: (
+      process.env.SLOT_MONITOR_PROFILE_DIR || "uploads/slot-monitor-profiles"
+    ).trim(),
+  };
+}
+
 /** Yangi yozuv yaratishda — v1'dan keyingi BARCHA maydonlar .env'dan. */
 function newFieldsSeed(): SettingsPatch {
-  return { ...v2FieldsSeed(), ...v3FieldsSeed() };
+  return { ...v2FieldsSeed(), ...v3FieldsSeed(), ...v4FieldsSeed() };
 }
 
 /**
@@ -279,6 +307,7 @@ export async function getAppSettings(): Promise<AppSettings> {
     };
     if (s.configVersion < 2) Object.assign(data, v2FieldsSeed());
     if (s.configVersion < 3) Object.assign(data, v3FieldsSeed());
+    if (s.configVersion < 4) Object.assign(data, v4FieldsSeed());
     const migrated = await prisma.appSettings.update({
       where: { id: 1 },
       data,
@@ -370,6 +399,12 @@ export function applySettingsToEnv(s: AppSettings): void {
   process.env.BOOKING_CDP_KEEP_CACHE = s.cdpKeepCache ? "true" : "false";
   process.env.BOOKING_CMS_CACHE = s.cmsCache ? "true" : "false";
   process.env.BOOKING_ASSET_CACHE = s.assetCache ? "true" : "false";
+
+  // --- v4 maydonlar (proksi shablon / echo URL / profil papka) ---
+  setStr("PROXY_USERNAME_TEMPLATE", s.proxyUsernameTemplate);
+  setStr("PROXY_PASSWORD_TEMPLATE", s.proxyPasswordTemplate);
+  setStr("PROXY_IP_ECHO_URL", s.proxyIpEchoUrl);
+  setStr("SLOT_MONITOR_PROFILE_DIR", s.slotMonitorProfileDir);
 }
 
 // Hydrate kesh — har job/poll bazaga urmasin (TTL ichida keshdan beriladi).
