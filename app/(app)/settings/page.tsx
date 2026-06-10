@@ -1,13 +1,13 @@
 import SettingsManager from "@/components/SettingsManager";
-import { getAppSettings, maskSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
-export default async function SettingsPage() {
-  const s = await getAppSettings();
+export default function SettingsPage() {
+  // Sozlamalar "qulf" ortida — SettingsManager super login/parol bilan ochilgach
+  // ma'lumotlarni o'zi server'dan oladi. Sahifa HTML'ida hech narsa ko'rinmaydi.
   return (
     <div className="mx-auto max-w-4xl">
-      <SettingsManager initial={maskSettings(s)} />
+      <SettingsManager />
     </div>
   );
 }

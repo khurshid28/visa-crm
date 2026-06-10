@@ -495,6 +495,51 @@ model AppSettings {
   // --- Worker'lar ---
   workerPerCpu Int @default(2) // WORKER_PER_CPU — 1 yadroga to'g'ri keladigan worker
 
+  // --- VFS / Booking URL'lari ---
+  registerUrl String @default("") // BOOKING_REGISTER_URL
+  loginUrl    String @default("") // BOOKING_LOGIN_URL
+  orderUrl    String @default("") // BOOKING_ORDER_URL
+  calendarUrl String @default("") // BOOKING_CALENDAR_URL
+  warmupUrl   String @default("") // BOOKING_WARMUP_URL
+
+  // --- Email / domen ---
+  emailDomain String @default("") // EMAIL_DOMAIN ({ism}.{familiya}.{id}@DOMEN)
+
+  // --- Telegram bot ---
+  telegramBotToken     String @default("") // TELEGRAM_BOT_TOKEN (maxfiy)
+  telegramAdminChatIds String @default("") // TELEGRAM_ADMIN_CHAT_IDS (vergul bilan chat ID lar)
+
+  // --- Gmail / IMAP (aktivatsiya xati) ---
+  imapHost     String  @default("") // IMAP_HOST
+  imapPort     Int     @default(993) // IMAP_PORT
+  imapUser     String  @default("") // IMAP_USER
+  imapPassword String  @default("") // IMAP_PASSWORD (maxfiy — Gmail App Password)
+  imapMailbox  String  @default("INBOX") // IMAP_MAILBOX
+  imapSecure   Boolean @default(true) // IMAP_SECURE
+
+  // --- VFS slot-monitor akkaunti (kalendar tekshiruvi) ---
+  slotMonitorEmail    String @default("") // SLOT_MONITOR_EMAIL
+  slotMonitorPassword String @default("") // SLOT_MONITOR_PASSWORD (maxfiy)
+
+  // --- Slot-worker (har 10 min kalendar) ---
+  slotWorkerIntervalMs  Int     @default(600000) // SLOT_WORKER_INTERVAL_MS
+  slotWorkerConcurrency Int     @default(2) // SLOT_WORKER_CONCURRENCY
+  slotNotifyTelegram    Boolean @default(true) // SLOT_NOTIFY_TELEGRAM
+  slotCheckProxy        Boolean @default(false) // SLOT_CHECK_PROXY
+
+  // --- Boshqa toggle / vaqt sozlamalari ---
+  blockResources     Boolean @default(true) // BOOKING_BLOCK_RESOURCES
+  osClick            Boolean @default(true) // BOOKING_OS_CLICK (Turnstile OS-klik)
+  chromeCdp          Boolean @default(true) // BOOKING_CHROME_CDP (real Chrome CDP)
+  proxyLogIp         Boolean @default(false) // PROXY_LOG_IP
+  registerTtlHours   Int     @default(24) // REGISTER_TTL_HOURS
+  proxySessionTtlMin Int     @default(60) // PROXY_SESSION_TTL_MIN
+  typeDelayMs        Int     @default(35) // BOOKING_TYPE_DELAY_MS
+
+  // Migratsiya versiyasi: yangi ustunlar .env'dan BIR MARTA to'ldiriladi
+  // (eski singleton yozuv yangi maydonlarni bo'sh ko'rsatmasligi uchun).
+  configVersion Int @default(1)
+
   updatedAt DateTime @updatedAt
   updatedBy String? // oxirgi tahrirlagan super-admin (username)
 }

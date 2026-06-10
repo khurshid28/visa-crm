@@ -1,7 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Cpu, Refresh, Danger, Health, Activity } from "iconsax-react";
+import {
+  Cpu,
+  Refresh,
+  Danger,
+  Health,
+  Activity,
+  Driver,
+  Monitor,
+  Box,
+  Clock,
+} from "iconsax-react";
+
+type ServerInfo = {
+  hostname: string;
+  osName: string;
+  osRelease: string;
+  arch: string;
+  cpuModel: string;
+  cores: number;
+  memTotal: number;
+  uptimeSec: number;
+};
 
 type CpuStat = {
   percent: number;
@@ -15,10 +36,24 @@ type CpuStat = {
   over: boolean;
   message: string;
   at: string;
+  server?: ServerInfo;
 };
 
 function fmtGB(bytes: number): string {
   return (bytes / 1024 ** 3).toFixed(1);
+}
+
+// Soniyani "Nd Nh Nm" ko'rinishiga keltiradi (server ishlash vaqti).
+function fmtUptime(sec: number): string {
+  if (!Number.isFinite(sec) || sec <= 0) return "—";
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const parts: string[] = [];
+  if (d) parts.push(`${d} kun`);
+  if (h) parts.push(`${h} soat`);
+  if (m || parts.length === 0) parts.push(`${m} daqiqa`);
+  return parts.join(" ");
 }
 
 // Daraja bo'yicha rang palitrasi.
@@ -129,10 +164,11 @@ export default function CpuMonitorCard() {
           </span>
           <div>
             <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-              CPU monitoring (jonli)
+              Server holati (jonli)
             </h2>
             <p className="text-xs text-slate-400">
-              Har 3 soniyada yangilanadi · chegara {stat?.threshold ?? 80}%
+              CPU · xotira · tizim ma'lumotlari · har 3 soniyada · chegara{" "}
+              {stat?.threshold ?? 80}%
             </p>
           </div>
         </div>
@@ -218,6 +254,80 @@ export default function CpuMonitorCard() {
           )}
         </div>
       </div>
+
+      {/* Server ma'lumotlari (tizim nomi, OS, protsessor, umumiy xotira) */}
+      {stat?.server && (
+        <div className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
+          <div className="mb-3 flex items-center gap-2">
+            <Driver
+              size={16}
+              variant="Bold"
+              className="text-slate-400 dark:text-slate-500"
+            />
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Server ma'lumotlari
+            </h3>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <ServerTile
+              icon={Monitor}
+              label="Tizim nomi"
+              value={stat.server.hostname}
+            />
+            <ServerTile
+              icon={Driver}
+              label="Operatsion tizim"
+              value={`${stat.server.osName} ${stat.server.osRelease}`}
+              sub={stat.server.arch}
+            />
+            <ServerTile
+              icon={Cpu}
+              label="Protsessor"
+              value={stat.server.cpuModel}
+              sub={`${stat.server.cores} yadro`}
+            />
+            <ServerTile
+              icon={Box}
+              label="Umumiy xotira (RAM)"
+              value={`${fmtGB(stat.server.memTotal)} GB`}
+            />
+            <ServerTile
+              icon={Clock}
+              label="Ishlash vaqti"
+              value={fmtUptime(stat.server.uptimeSec)}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Server ma'lumoti uchun kichik plitka (label + qiymat).
+function ServerTile({
+  icon: Icon,
+  label,
+  value,
+  sub,
+}: {
+  icon: typeof Cpu;
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+      <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+        <Icon size={13} variant="Bold" />
+        {label}
+      </div>
+      <p
+        className="truncate text-sm font-semibold text-slate-700 dark:text-slate-200"
+        title={value}
+      >
+        {value}
+      </p>
+      {sub && <p className="mt-0.5 text-[11px] text-slate-400">{sub}</p>}
     </div>
   );
 }

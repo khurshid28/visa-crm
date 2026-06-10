@@ -11,23 +11,21 @@ import {
   Calendar,
   Ticket,
   Box,
+  Driver,
   Setting2,
 } from "iconsax-react";
 
 const LINKS = [
   { href: "/dashboard", label: "Boshqaruv paneli", icon: Category },
+  { href: "/settings", label: "Sozlamalar", icon: Setting2 },
+  { href: "/tickets", label: "Tiketlar", icon: Ticket },
   { href: "/slots", label: "Slotlar", icon: Calendar },
   { href: "/groups", label: "Guruhlar", icon: Profile2User },
   { href: "/users", label: "Userlar", icon: People },
   { href: "/documents", label: "Hujjatlar", icon: DocumentText },
   { href: "/monitoring", label: "Monitoring", icon: Chart },
+  { href: "/server", label: "Server", icon: Driver },
   { href: "/workers", label: "Workerlar", icon: Box },
-];
-
-// Eng pastda turadigan havola(lar).
-const BOTTOM_LINKS = [
-  { href: "/tickets", label: "Tiketlar", icon: Ticket },
-  { href: "/settings", label: "Sozlamalar", icon: Setting2 },
 ];
 
 export default function SidebarNav({
@@ -70,11 +68,6 @@ export default function SidebarNav({
   return (
     <nav className="flex flex-1 flex-col gap-1">
       {LINKS.map(renderLink)}
-
-      {/* Eng pastdagi havolalar (mt-auto bilan pastga suriladi) */}
-      <div className="mt-auto flex flex-col gap-1 border-t border-slate-100 pt-2 dark:border-slate-800">
-        {BOTTOM_LINKS.map(renderLink)}
-      </div>
     </nav>
   );
 }

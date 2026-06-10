@@ -8,11 +8,17 @@ import {
   Timer1,
   Cpu,
   Lock1,
-  ShieldTick,
   TickCircle,
   Eye,
   EyeSlash,
   InfoCircle,
+  Routing,
+  Sms,
+  Send2,
+  DirectInbox,
+  Personalcard,
+  Calendar,
+  Key,
 } from "iconsax-react";
 import { useToast } from "@/components/Toast";
 import type { MaskedSettings } from "@/lib/settings";
@@ -42,6 +48,31 @@ function Toggle({
         }`}
       />
     </button>
+  );
+}
+
+// Sarlavha + tavsif bilan toggle qatori (takrorlanishni kamaytirish uchun).
+function ToggleRow({
+  title,
+  desc,
+  on,
+  onChange,
+}: {
+  title: string;
+  desc: string;
+  on: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+      <div className="pr-3">
+        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+          {title}
+        </p>
+        <p className="text-[11px] text-slate-400">{desc}</p>
+      </div>
+      <Toggle on={on} onChange={onChange} />
+    </div>
   );
 }
 
@@ -103,55 +134,175 @@ function Field({
 const inputCls =
   "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-brand-500/20";
 
-export default function SettingsManager({
-  initial,
+// Maxfiy maydon (parol/token) — ko'rsatish tugmasi va "saqlangan" ko'rsatkichi bilan.
+function SecretField({
+  label,
+  value,
+  onChange,
+  show,
+  onToggle,
+  saved,
+  placeholder,
 }: {
-  initial: MaskedSettings;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  show: boolean;
+  onToggle: () => void;
+  saved: boolean;
+  placeholder: string;
 }) {
+  return (
+    <Field
+      label={label}
+      hint={
+        saved
+          ? "Saqlangan. O'zgartirish uchun yangi qiymat kiriting."
+          : "Hali kiritilmagan."
+      }
+    >
+      <div className="relative">
+        <input
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={saved ? "•••••••• (saqlangan)" : placeholder}
+          autoComplete="new-password"
+          className={inputCls + " pr-10"}
+        />
+        <button
+          type="button"
+          onClick={onToggle}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+        >
+          {show ? <EyeSlash size={18} /> : <Eye size={18} />}
+        </button>
+      </div>
+    </Field>
+  );
+}
+
+export default function SettingsManager() {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [form, setForm] = useState<MaskedSettings>(initial);
-  const [proxyPass, setProxyPass] = useState(""); // yangi parol (bo'sh = tegmaymiz)
-  const [showPass, setShowPass] = useState(false);
+  const [unlocked, setUnlocked] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  const [form, setForm] = useState<MaskedSettings | null>(null);
   const [superUsername, setSuperUsername] = useState("");
   const [superPassword, setSuperPassword] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // Yangi maxfiy qiymatlar (bo'sh = tegmaymiz, eski saqlanadi).
+  const [proxyPass, setProxyPass] = useState("");
+  const [telegramBotToken, setTelegramBotToken] = useState("");
+  const [imapPassword, setImapPassword] = useState("");
+  const [slotMonitorPassword, setSlotMonitorPassword] = useState("");
+  const [showProxyPass, setShowProxyPass] = useState(false);
+  const [showBotToken, setShowBotToken] = useState(false);
+  const [showImapPass, setShowImapPass] = useState(false);
+  const [showSlotPass, setShowSlotPass] = useState(false);
+
   const set = <K extends keyof MaskedSettings>(
     key: K,
     value: MaskedSettings[K],
-  ) => setForm((f) => ({ ...f, [key]: value }));
+  ) => setForm((f) => (f ? { ...f, [key]: value } : f));
 
   const num = (v: string): number => {
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
   };
 
-  async function save() {
+  // Qulfni ochish — super login/parolni server'da tekshiradi, sozlamalarni oladi.
+  async function unlock() {
     if (!superUsername.trim() || !superPassword.trim()) {
       toast("Super login va parolni kiriting", "error");
       return;
     }
+    setUnlocking(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "verify",
+          superUsername,
+          superPassword,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast(data?.error || "Login yoki parol noto'g'ri", "error");
+        return;
+      }
+      setForm(data.settings as MaskedSettings);
+      setUnlocked(true);
+    } catch {
+      toast("Ulanishda xatolik", "error");
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
+  async function save() {
+    if (!form) return;
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {
         superUsername,
         superPassword,
+        // Proksi
         proxyEnabled: form.proxyEnabled,
         proxyHost: form.proxyHost,
         proxyPort: form.proxyPort,
         proxyUser: form.proxyUser,
         proxyCountries: form.proxyCountries,
+        proxyLogIp: form.proxyLogIp,
+        proxySessionTtlMin: form.proxySessionTtlMin,
+        // Chrome / brauzer
         chromeHeadless: form.chromeHeadless,
+        chromeCdp: form.chromeCdp,
+        osClick: form.osClick,
+        blockResources: form.blockResources,
+        typeDelayMs: form.typeDelayMs,
+        // Vaqt chegaralari / urinishlar
         captchaTimeoutMs: form.captchaTimeoutMs,
         cfChallengeTimeoutMs: form.cfChallengeTimeoutMs,
         maxAttempts: form.maxAttempts,
         ipRetries: form.ipRetries,
         workerPerCpu: form.workerPerCpu,
+        registerTtlHours: form.registerTtlHours,
+        // VFS URL'lari
+        registerUrl: form.registerUrl,
+        loginUrl: form.loginUrl,
+        orderUrl: form.orderUrl,
+        calendarUrl: form.calendarUrl,
+        warmupUrl: form.warmupUrl,
+        // Email / domen
+        emailDomain: form.emailDomain,
+        // Telegram
+        telegramAdminChatIds: form.telegramAdminChatIds,
+        // Gmail / IMAP
+        imapHost: form.imapHost,
+        imapPort: form.imapPort,
+        imapUser: form.imapUser,
+        imapMailbox: form.imapMailbox,
+        imapSecure: form.imapSecure,
+        // VFS slot-monitor akkaunti
+        slotMonitorEmail: form.slotMonitorEmail,
+        // Slot-worker
+        slotWorkerIntervalMs: form.slotWorkerIntervalMs,
+        slotWorkerConcurrency: form.slotWorkerConcurrency,
+        slotNotifyTelegram: form.slotNotifyTelegram,
+        slotCheckProxy: form.slotCheckProxy,
       };
-      // Parol faqat yangi qiymat kiritilganda yuboriladi.
+      // Maxfiy maydonlar — faqat yangi qiymat kiritilganda yuboriladi.
       if (proxyPass.length > 0) payload.proxyPass = proxyPass;
+      if (telegramBotToken.length > 0)
+        payload.telegramBotToken = telegramBotToken;
+      if (imapPassword.length > 0) payload.imapPassword = imapPassword;
+      if (slotMonitorPassword.length > 0)
+        payload.slotMonitorPassword = slotMonitorPassword;
 
       const res = await fetch("/api/settings", {
         method: "POST",
@@ -166,6 +317,9 @@ export default function SettingsManager({
       if (data?.settings) {
         setForm(data.settings as MaskedSettings);
         setProxyPass("");
+        setTelegramBotToken("");
+        setImapPassword("");
+        setSlotMonitorPassword("");
       }
       toast("Sozlamalar saqlandi");
       router.refresh();
@@ -176,6 +330,62 @@ export default function SettingsManager({
     }
   }
 
+  // --- QULF EKRANI: super login/parolsiz ichkari ochilmaydi ---
+  if (!unlocked || !form) {
+    return (
+      <div className="mx-auto max-w-md">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-5 flex flex-col items-center text-center">
+            <span className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300">
+              <Lock1 size={28} variant="Bold" />
+            </span>
+            <h1 className="text-lg font-bold text-slate-800 dark:text-slate-100">
+              Sozlamalar yopiq
+            </h1>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Ichkariga kirish uchun super login va parolni kiriting.
+            </p>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              unlock();
+            }}
+            className="space-y-3"
+          >
+            <Field label="Super login">
+              <input
+                value={superUsername}
+                onChange={(e) => setSuperUsername(e.target.value)}
+                placeholder="super login"
+                autoComplete="off"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Super parol">
+              <input
+                type="password"
+                value={superPassword}
+                onChange={(e) => setSuperPassword(e.target.value)}
+                placeholder="super parol"
+                autoComplete="new-password"
+                className={inputCls}
+              />
+            </Field>
+            <button
+              type="submit"
+              disabled={unlocking}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-50"
+            >
+              <Key size={18} variant="Bold" />
+              {unlocking ? "Tekshirilmoqda..." : "Ochish"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   const lastInfo = form.updatedBy
     ? `Oxirgi o'zgarish: ${form.updatedBy} · ${new Date(
         form.updatedAt,
@@ -184,17 +394,30 @@ export default function SettingsManager({
 
   return (
     <div className="space-y-5 pb-24">
-      <div>
-        <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">
-          Sozlamalar
-        </h1>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          Tizim sozlamalari bazada saqlanadi. O'zgartirish uchun super-admin
-          login/parol talab qilinadi.
-        </p>
-        {lastInfo && (
-          <p className="mt-1 text-[11px] text-slate-400">{lastInfo}</p>
-        )}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">
+            Sozlamalar
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Barcha tizim sozlamalari shu yerda. O'zgartirib "Saqlash"ni bosing.
+          </p>
+          {lastInfo && (
+            <p className="mt-1 text-[11px] text-slate-400">{lastInfo}</p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setUnlocked(false);
+            setForm(null);
+            setSuperPassword("");
+          }}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
+          <Lock1 size={14} variant="Bold" />
+          Qulflash
+        </button>
       </div>
 
       {/* --- PROKSI --- */}
@@ -255,34 +478,15 @@ export default function SettingsManager({
                 className={inputCls}
               />
             </Field>
-            <Field
+            <SecretField
               label="Parol"
-              hint={
-                form.hasProxyPass
-                  ? "Saqlangan. O'zgartirish uchun yangi parol kiriting."
-                  : "Hali kiritilmagan."
-              }
-            >
-              <div className="relative">
-                <input
-                  type={showPass ? "text" : "password"}
-                  value={proxyPass}
-                  onChange={(e) => setProxyPass(e.target.value)}
-                  placeholder={
-                    form.hasProxyPass ? "•••••••• (saqlangan)" : "proksi parol"
-                  }
-                  autoComplete="new-password"
-                  className={inputCls + " pr-10"}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPass((s) => !s)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                >
-                  {showPass ? <EyeSlash size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </Field>
+              value={proxyPass}
+              onChange={setProxyPass}
+              show={showProxyPass}
+              onToggle={() => setShowProxyPass((s) => !s)}
+              saved={form.hasProxyPass}
+              placeholder="proksi parol"
+            />
           </div>
           <Field
             label="Davlatlar (vergul bilan)"
@@ -295,16 +499,251 @@ export default function SettingsManager({
               className={inputCls}
             />
           </Field>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field
+              label="Sessiya muddati (daqiqa)"
+              hint="Bitta proksi sessiyasi necha daqiqa saqlanadi (1–1440)."
+            >
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                value={form.proxySessionTtlMin}
+                onChange={(e) => set("proxySessionTtlMin", num(e.target.value))}
+                className={inputCls}
+              />
+            </Field>
+            <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+              <div>
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                  IP loglansin
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Har sessiyada chiqish IP manzilini logga yozish (debug).
+                </p>
+              </div>
+              <Toggle
+                on={form.proxyLogIp}
+                onChange={(v) => set("proxyLogIp", v)}
+              />
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* --- VFS URL'LARI --- */}
+      <Card
+        icon={Routing}
+        title="VFS havolalari (URL)"
+        desc="Avtomatlashtirish ishlatadigan VFS sahifa manzillari. Sayt o'zgarsa shu yerdan yangilanadi."
+      >
+        <Field
+          label="Ro'yxatdan o'tish (register) URL"
+          hint="VFS register sahifasi."
+        >
+          <input
+            value={form.registerUrl}
+            onChange={(e) => set("registerUrl", e.target.value)}
+            placeholder="https://visa.vfsglobal.com/.../register"
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Kirish (login) URL" hint="VFS login sahifasi.">
+          <input
+            value={form.loginUrl}
+            onChange={(e) => set("loginUrl", e.target.value)}
+            placeholder="https://visa.vfsglobal.com/.../login"
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Buyurtma (order/booking) URL" hint="Ariza/booking sahifasi.">
+          <input
+            value={form.orderUrl}
+            onChange={(e) => set("orderUrl", e.target.value)}
+            placeholder="https://visa.vfsglobal.com/.../application-detail"
+            className={inputCls}
+          />
+        </Field>
+        <Field
+          label="Kalendar (slot) URL"
+          hint="Bo'sh slotlar tekshiriladigan sahifa."
+        >
+          <input
+            value={form.calendarUrl}
+            onChange={(e) => set("calendarUrl", e.target.value)}
+            placeholder="https://visa.vfsglobal.com/.../slot"
+            className={inputCls}
+          />
+        </Field>
+        <Field
+          label="Warm-up URL"
+          hint="Sessiyani qizdirish uchun ochiladigan sahifa (ixtiyoriy)."
+        >
+          <input
+            value={form.warmupUrl}
+            onChange={(e) => set("warmupUrl", e.target.value)}
+            placeholder="https://visa.vfsglobal.com/"
+            className={inputCls}
+          />
+        </Field>
+      </Card>
+
+      {/* --- EMAIL / DOMEN --- */}
+      <Card
+        icon={Sms}
+        title="Email domeni"
+        desc="Ariza uchun avtomatik yaratiladigan pochta manzillari domeni."
+      >
+        <Field
+          label="Email domeni"
+          hint="Masalan: example.com — yaratilgan pochtalar user@example.com ko'rinishida bo'ladi."
+        >
+          <input
+            value={form.emailDomain}
+            onChange={(e) => set("emailDomain", e.target.value)}
+            placeholder="example.com"
+            className={inputCls}
+          />
+        </Field>
+      </Card>
+
+      {/* --- TELEGRAM BOT --- */}
+      <Card
+        icon={Send2}
+        title="Telegram bot"
+        desc="Bildirishnomalar yuboriladigan bot va admin chat ID'lari."
+      >
+        <SecretField
+          label="Bot token"
+          value={telegramBotToken}
+          onChange={setTelegramBotToken}
+          show={showBotToken}
+          onToggle={() => setShowBotToken((s) => !s)}
+          saved={form.hasTelegramBotToken}
+          placeholder="123456:ABC-DEF..."
+        />
+        <Field
+          label="Admin chat ID'lari (vergul bilan)"
+          hint="Bildirishnoma keladigan Telegram chat ID'lari. Masalan: 123456789,987654321"
+        >
+          <input
+            value={form.telegramAdminChatIds}
+            onChange={(e) => set("telegramAdminChatIds", e.target.value)}
+            placeholder="123456789,987654321"
+            className={inputCls}
+          />
+        </Field>
+      </Card>
+
+      {/* --- GMAIL / IMAP --- */}
+      <Card
+        icon={DirectInbox}
+        title="Gmail / IMAP qutisi"
+        desc="Tasdiqlash kodlari (OTP) o'qiladigan pochta qutisi sozlamalari."
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="sm:col-span-2">
+            <Field label="IMAP host" hint="Masalan: imap.gmail.com">
+              <input
+                value={form.imapHost}
+                onChange={(e) => set("imapHost", e.target.value)}
+                placeholder="imap.gmail.com"
+                className={inputCls}
+              />
+            </Field>
+          </div>
+          <Field label="Port" hint="Odatda 993">
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={form.imapPort}
+              onChange={(e) => set("imapPort", num(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Foydalanuvchi (email)">
+            <input
+              value={form.imapUser}
+              onChange={(e) => set("imapUser", e.target.value)}
+              placeholder="inbox@gmail.com"
+              autoComplete="off"
+              className={inputCls}
+            />
+          </Field>
+          <SecretField
+            label="Parol (app password)"
+            value={imapPassword}
+            onChange={setImapPassword}
+            show={showImapPass}
+            onToggle={() => setShowImapPass((s) => !s)}
+            saved={form.hasImapPassword}
+            placeholder="Gmail app password"
+          />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Papka (mailbox)" hint="Odatda INBOX">
+            <input
+              value={form.imapMailbox}
+              onChange={(e) => set("imapMailbox", e.target.value)}
+              placeholder="INBOX"
+              className={inputCls}
+            />
+          </Field>
+          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+            <div>
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                Xavfsiz (TLS/SSL)
+              </p>
+              <p className="text-[11px] text-slate-400">
+                993-port uchun yoqilgan bo'lsin.
+              </p>
+            </div>
+            <Toggle
+              on={form.imapSecure}
+              onChange={(v) => set("imapSecure", v)}
+            />
+          </div>
+        </div>
+      </Card>
+
+      {/* --- VFS SLOT-MONITOR AKKAUNTI --- */}
+      <Card
+        icon={Personalcard}
+        title="VFS slot-monitor akkaunti"
+        desc="Bo'sh slotlarni kuzatish uchun ishlatiladigan VFS hisob ma'lumotlari."
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Email">
+            <input
+              value={form.slotMonitorEmail}
+              onChange={(e) => set("slotMonitorEmail", e.target.value)}
+              placeholder="monitor@example.com"
+              autoComplete="off"
+              className={inputCls}
+            />
+          </Field>
+          <SecretField
+            label="Parol"
+            value={slotMonitorPassword}
+            onChange={setSlotMonitorPassword}
+            show={showSlotPass}
+            onToggle={() => setShowSlotPass((s) => !s)}
+            saved={form.hasSlotMonitorPassword}
+            placeholder="VFS akkaunt paroli"
+          />
         </div>
       </Card>
 
       {/* --- CHROME + WORKER (yonma-yon) --- */}
-      <div className="grid gap-5 lg:grid-cols-2">
-        {/* --- CHROME KO'RINISHI --- */}
+      <div className="grid items-start gap-5 lg:grid-cols-2">
+        {/* --- CHROME / BRAUZER --- */}
         <Card
           icon={Monitor}
-          title="Chrome ko'rinishi"
-          desc="Worker brauzeri ekranda ko'rinsinmi yoki yashirin (headless) ishlasinmi."
+          title="Chrome / brauzer"
+          desc="Worker brauzeri qanday ishlashini sozlash."
         >
           <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
             <div>
@@ -322,6 +761,37 @@ export default function SettingsManager({
               onChange={(v) => set("chromeHeadless", !v)}
             />
           </div>
+          <ToggleRow
+            title="CDP (DevTools Protocol)"
+            desc="Tezroq va barqaror boshqaruv uchun CDP ulanishi."
+            on={form.chromeCdp}
+            onChange={(v) => set("chromeCdp", v)}
+          />
+          <ToggleRow
+            title="OS-bosish (haqiqiy klik)"
+            desc="Tizim darajasida sichqoncha bosishi (bot aniqlashga qarshi)."
+            on={form.osClick}
+            onChange={(v) => set("osClick", v)}
+          />
+          <ToggleRow
+            title="Resurslarni bloklash"
+            desc="Rasm/shrift/CSS yuklamaslik — tezlik uchun."
+            on={form.blockResources}
+            onChange={(v) => set("blockResources", v)}
+          />
+          <Field
+            label="Yozish tezligi (ms / belgi)"
+            hint="Maydonlarga yozishda belgilararo kechikish (0–500 ms)."
+          >
+            <input
+              type="number"
+              min={0}
+              max={500}
+              value={form.typeDelayMs}
+              onChange={(e) => set("typeDelayMs", num(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
         </Card>
 
         {/* --- WORKER'LAR --- */}
@@ -414,36 +884,72 @@ export default function SettingsManager({
               className={inputCls}
             />
           </Field>
+          <Field
+            label="Register amal qilish muddati (soat)"
+            hint="Ro'yxatdan o'tgan akkaunt necha soat yaroqli (1–168)."
+          >
+            <input
+              type="number"
+              min={1}
+              max={168}
+              value={form.registerTtlHours}
+              onChange={(e) => set("registerTtlHours", num(e.target.value))}
+              className={inputCls}
+            />
+          </Field>
         </div>
       </Card>
 
-      {/* --- SUPER-ADMIN UNLOCK --- */}
+      {/* --- SLOT-WORKER --- */}
       <Card
-        icon={ShieldTick}
-        title="Super-admin tasdiqlash"
-        desc="Sozlamalarni saqlash uchun super login/parol kiriting (oddiy admin emas)."
+        icon={Calendar}
+        title="Slot kuzatuvchi (worker)"
+        desc="Bo'sh slotlarni avtomatik tekshirish davriyligi va sozlamalari."
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Super login">
+          <Field
+            label="Tekshirish oralig'i (daqiqa)"
+            hint="Har necha daqiqada slot tekshiriladi (1–60)."
+          >
             <input
-              value={superUsername}
-              onChange={(e) => setSuperUsername(e.target.value)}
-              placeholder="super login"
-              autoComplete="off"
+              type="number"
+              min={1}
+              max={60}
+              value={Math.round(form.slotWorkerIntervalMs / 60000)}
+              onChange={(e) =>
+                set("slotWorkerIntervalMs", num(e.target.value) * 60000)
+              }
               className={inputCls}
             />
           </Field>
-          <Field label="Super parol">
+          <Field
+            label="Parallel tekshiruv (concurrency)"
+            hint="Bir vaqtda nechta tekshiruv (1–10)."
+          >
             <input
-              type="password"
-              value={superPassword}
-              onChange={(e) => setSuperPassword(e.target.value)}
-              placeholder="super parol"
-              autoComplete="new-password"
+              type="number"
+              min={1}
+              max={10}
+              value={form.slotWorkerConcurrency}
+              onChange={(e) =>
+                set("slotWorkerConcurrency", num(e.target.value))
+              }
               className={inputCls}
             />
           </Field>
         </div>
+        <ToggleRow
+          title="Telegram'ga xabar"
+          desc="Bo'sh slot topilsa Telegram'ga bildirishnoma yuborilsin."
+          on={form.slotNotifyTelegram}
+          onChange={(v) => set("slotNotifyTelegram", v)}
+        />
+        <ToggleRow
+          title="Proksi orqali tekshirish"
+          desc="Slot tekshiruvi ham proksi orqali amalga oshirilsin."
+          on={form.slotCheckProxy}
+          onChange={(v) => set("slotCheckProxy", v)}
+        />
       </Card>
 
       {/* --- SAQLASH --- */}

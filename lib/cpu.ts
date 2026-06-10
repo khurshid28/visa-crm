@@ -56,6 +56,42 @@ export async function sampleCpuPercent(ms = 200): Promise<number> {
 
 export type CpuLevel = "ok" | "warn" | "high";
 
+// Server (mashina) identifikatsiyasi — deyarli o'zgarmaydigan ma'lumotlar:
+// nomi, operatsion tizimi, protsessor modeli, umumiy xotira, ishlash vaqti.
+export type ServerInfo = {
+  hostname: string; // tizim (server) nomi
+  osName: string; // qulay nom: Windows | Linux | macOS
+  osRelease: string; // OS versiyasi (os.release())
+  arch: string; // arxitektura: x64 / arm64 ...
+  cpuModel: string; // protsessor modeli (1-yadro nomi)
+  cores: number; // mantiqiy yadrolar soni
+  memTotal: number; // umumiy operativ xotira (bayt)
+  uptimeSec: number; // server ishlab turgan vaqt (soniya)
+};
+
+// platform kodini qulay nomga aylantiradi.
+function friendlyOs(platform: string): string {
+  if (platform === "win32") return "Windows";
+  if (platform === "linux") return "Linux";
+  if (platform === "darwin") return "macOS";
+  return platform || "—";
+}
+
+// Server identifikatsiyasini qaytaradi (os modulidan, arzon).
+export function getServerInfo(): ServerInfo {
+  const cpus = os.cpus() || [];
+  return {
+    hostname: os.hostname() || "—",
+    osName: friendlyOs(os.platform()),
+    osRelease: os.release() || "",
+    arch: os.arch() || "",
+    cpuModel: (cpus[0]?.model || "—").trim(),
+    cores: cpus.length || 1,
+    memTotal: os.totalmem(),
+    uptimeSec: Math.round(os.uptime()),
+  };
+}
+
 export type CpuStat = {
   percent: number; // band foizi (0..100)
   cores: number; // mantiqiy yadrolar soni
@@ -68,6 +104,7 @@ export type CpuStat = {
   over: boolean; // chegaradan oshganmi
   message: string; // qisqa o'zbekcha izoh
   at: string; // o'lchangan vaqt (ISO)
+  server?: ServerInfo; // server identifikatsiyasi (nom, OS, xotira)
 };
 
 function levelFor(percent: number): CpuLevel {
@@ -111,6 +148,7 @@ export async function getCpuStat(sampleMs = 200): Promise<CpuStat> {
     over: percent >= CPU_THRESHOLD,
     message: messageFor(percent, level),
     at: new Date().toISOString(),
+    server: getServerInfo(),
   };
 }
 

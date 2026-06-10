@@ -1,6 +1,4 @@
-import CpuMonitorCard from "@/components/CpuMonitorCard";
 import WorkersPanel from "@/components/WorkersPanel";
-import ProxyUsagePanel from "@/components/ProxyUsagePanel";
 
 export const dynamic = "force-dynamic";
 
@@ -12,15 +10,13 @@ export default function WorkersPage() {
           Workerlar
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Worker pool boshqaruvi (register / login / slot / booking) va jonli CPU
-          monitoring. Har bir worker = 1 ta haqiqiy Chrome, shuning uchun soni CPU
-          yadrolariga bog'liq.
+          Worker pool boshqaruvi (register / login / slot / booking). Har bir
+          worker = 1 ta haqiqiy Chrome, shuning uchun soni CPU yadrolariga
+          bog'liq. Server resurslari va proksi hisobi «Server» bo'limida.
         </p>
       </div>
 
-      <CpuMonitorCard />
       <WorkersPanel />
-      <ProxyUsagePanel />
     </div>
   );
 }
