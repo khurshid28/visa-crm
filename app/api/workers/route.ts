@@ -6,6 +6,7 @@ import {
   ensureSeed,
   listWorkers,
   listWorkerLogs,
+  searchLogs,
   activeWorkers,
   setActive,
   setActiveCount,
@@ -62,6 +63,20 @@ export async function GET(req: NextRequest) {
   const name = req.nextUrl.searchParams.get("logs");
   if (name) {
     return NextResponse.json({ logs: await listWorkerLogs(name) });
+  }
+  // ?search=... => barcha loglar bo'yicha qidiruv (xato / arizachi / worker).
+  //   &status=ok|fail, &stage=register|login|order|...  (ixtiyoriy filtrlar)
+  const sp = req.nextUrl.searchParams;
+  if (sp.has("search")) {
+    const statusRaw = sp.get("status");
+    const status =
+      statusRaw === "ok" || statusRaw === "fail" ? statusRaw : undefined;
+    const results = await searchLogs({
+      q: sp.get("search") || "",
+      status,
+      stage: sp.get("stage") || undefined,
+    });
+    return NextResponse.json({ results });
   }
   // Next.js jarayoni proksi sozlamasini bazadan yangilab tursin (proksi banner
   // to'g'ri ko'rsatilishi uchun) — keshlangan, arzon.

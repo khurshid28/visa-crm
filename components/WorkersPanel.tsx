@@ -14,6 +14,7 @@ import {
   DocumentText,
   TickCircle,
   Clock,
+  SearchNormal1,
 } from "iconsax-react";
 import { useToast } from "@/components/Toast";
 
@@ -138,11 +139,14 @@ type WorkerLog = {
   attempt: number;
   ok: boolean;
   note: string | null;
+  pageError?: string | null;
   durationMs: number;
   statusCode: number | null;
   exitIp: string | null;
   finalUrl: string | null;
+  workerProfile?: string | null;
   applicantId: number | null;
+  groupId?: number | null;
   createdAt: string;
   applicant: {
     surname: string | null;
@@ -192,6 +196,15 @@ export default function WorkersPanel() {
   const [logsFor, setLogsFor] = useState<WorkerRow | null>(null);
   const [logs, setLogs] = useState<WorkerLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
+
+  // --- Loglarni qidirish (xato / arizachi / worker bo'yicha) ---
+  const [searchQ, setSearchQ] = useState("");
+  const [searchStatus, setSearchStatus] = useState<"all" | "ok" | "fail">(
+    "all",
+  );
+  const [searchResults, setSearchResults] = useState<WorkerLog[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -283,6 +296,33 @@ export default function WorkersPanel() {
     return () => window.clearInterval(id);
   }, [logsFor, loadLogs]);
 
+  // Loglarni qidiradi (xato matni / arizachi / worker), natijani modalda ochadi.
+  const runSearch = useCallback(async () => {
+    const q = searchQ.trim();
+    if (!q && searchStatus === "all") {
+      toast("Qidiruv so'zini kiriting yoki holatni tanlang", "error");
+      return;
+    }
+    setSearchLoading(true);
+    setSearchOpen(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("search", q);
+      if (searchStatus !== "all") params.set("status", searchStatus);
+      const res = await fetch(`/api/workers?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const json = (await res.json().catch(() => null)) as {
+        results?: WorkerLog[];
+      } | null;
+      setSearchResults(res.ok && json?.results ? json.results : []);
+    } catch {
+      setSearchResults([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [searchQ, searchStatus, toast]);
+
   const cpu = data?.cpu;
   const workers = data?.workers ?? [];
   const total = workers.length;
@@ -327,6 +367,61 @@ export default function WorkersPanel() {
         <StatCard label="Yoniq" value={activeCount} tone="emerald" />
         <StatCard label="Band (ishda)" value={busyCount} tone="amber" />
         <StatCard label="Navbatda" value={queueDepth} tone="indigo" />
+      </div>
+
+      {/* Loglarni qidirish — xato matni, arizachi (ism/familiya/email) yoki
+          worker nomi bo'yicha. Qaysi worker, qachon, qanday holat ko'rsatadi. */}
+      <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-800/40">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[200px] flex-1">
+            <SearchNormal1
+              size={15}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              value={searchQ}
+              onChange={(e) => setSearchQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") runSearch();
+              }}
+              placeholder="Xato matni, arizachi ismi/familiyasi, email yoki worker nomi…"
+              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-brand-500/20"
+            />
+          </div>
+          <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+            {(
+              [
+                ["all", "Hammasi"],
+                ["fail", "Xato"],
+                ["ok", "OK"],
+              ] as const
+            ).map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => setSearchStatus(val)}
+                className={`px-3 py-2 text-xs font-semibold transition ${
+                  searchStatus === val
+                    ? val === "fail"
+                      ? "bg-rose-600 text-white"
+                      : val === "ok"
+                        ? "bg-emerald-600 text-white"
+                        : "bg-slate-700 text-white dark:bg-slate-600"
+                    : "bg-white text-slate-500 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={runSearch}
+            disabled={searchLoading}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-50"
+          >
+            <SearchNormal1 size={14} variant="Bold" />
+            {searchLoading ? "Qidirilmoqda…" : "Qidirish"}
+          </button>
+        </div>
       </div>
 
       {/* PROKSI holati — o'lik bo'lsa worker'lar behuda Chrome ochmaydi */}
@@ -697,6 +792,144 @@ export default function WorkersPanel() {
             {/* Pastki izoh */}
             <div className="border-t border-slate-100 px-5 py-2.5 text-center text-[11px] text-slate-400 dark:border-slate-800">
               Har 4 soniyada jonli yangilanadi · {logs.length} ta step
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Loglarni qidirish natijalari modali */}
+      {searchOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
+            onClick={() => setSearchOpen(false)}
+          />
+          <div className="relative z-10 flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-slate-900">
+            {/* Sarlavha */}
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300">
+                  <SearchNormal1 size={18} variant="Bold" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                    Qidiruv natijalari
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {searchQ.trim() ? `"${searchQ.trim()}" · ` : ""}
+                    {searchStatus === "fail"
+                      ? "faqat xatolar"
+                      : searchStatus === "ok"
+                        ? "faqat muvaffaqiyatli"
+                        : "barcha holatlar"}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSearchOpen(false)}
+                className="text-slate-400 transition hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <CloseCircle size={22} />
+              </button>
+            </div>
+
+            {/* Natijalar ro'yxati */}
+            <div className="flex-1 overflow-y-auto px-5 py-3">
+              {searchLoading && !searchResults ? (
+                <p className="py-10 text-center text-sm text-slate-400">
+                  Qidirilmoqda…
+                </p>
+              ) : !searchResults || searchResults.length === 0 ? (
+                <div className="py-10 text-center">
+                  <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-slate-300 dark:bg-slate-800 dark:text-slate-600">
+                    <SearchNormal1 size={24} variant="Bold" />
+                  </span>
+                  <p className="mt-3 text-sm text-slate-400">
+                    Hech narsa topilmadi.
+                  </p>
+                </div>
+              ) : (
+                <ol className="space-y-2">
+                  {searchResults.map((l) => (
+                    <li
+                      key={l.id}
+                      className="rounded-xl border border-slate-100 p-3 dark:border-slate-800"
+                    >
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        {l.ok ? (
+                          <TickCircle
+                            size={15}
+                            variant="Bold"
+                            className="shrink-0 text-emerald-500"
+                          />
+                        ) : (
+                          <CloseCircle
+                            size={15}
+                            variant="Bold"
+                            className="shrink-0 text-rose-500"
+                          />
+                        )}
+                        <span
+                          className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold ${jobTone(
+                            l.stage,
+                          )}`}
+                        >
+                          {STAGE_LABELS[l.stage] || l.stage}
+                        </span>
+                        {l.workerProfile && (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300">
+                            <Box size={11} variant="Bold" />
+                            {l.workerProfile}
+                          </span>
+                        )}
+                        {l.applicantId != null && (
+                          <span className="min-w-0 truncate text-[11px] text-slate-500 dark:text-slate-400">
+                            #{l.applicantId}
+                            {applicantName(l.applicant)
+                              ? ` · ${applicantName(l.applicant)}`
+                              : ""}
+                          </span>
+                        )}
+                        <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-slate-400">
+                          <Clock size={11} /> {fmtTime(l.createdAt)}
+                        </span>
+                      </div>
+                      {(l.note || l.pageError) && (
+                        <p
+                          className={`mt-1.5 text-xs leading-relaxed ${
+                            l.ok
+                              ? "text-slate-600 dark:text-slate-300"
+                              : "text-rose-600 dark:text-rose-300"
+                          }`}
+                        >
+                          {l.note || l.pageError}
+                        </p>
+                      )}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                        {l.statusCode != null && (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                            HTTP {l.statusCode}
+                          </span>
+                        )}
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                          {(l.durationMs / 1000).toFixed(1)}s
+                        </span>
+                        {l.exitIp && (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                            IP {l.exitIp}
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+
+            {/* Pastki izoh */}
+            <div className="border-t border-slate-100 px-5 py-2.5 text-center text-[11px] text-slate-400 dark:border-slate-800">
+              {searchResults ? `${searchResults.length} ta natija` : ""} · eng
+              yangi 200 tagacha
             </div>
           </div>
         </div>

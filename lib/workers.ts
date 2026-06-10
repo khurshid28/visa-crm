@@ -1,5 +1,6 @@
 import os from "os";
 import { prisma } from "./prisma";
+import type { Prisma } from "@prisma/client";
 
 // ===========================================================================
 //  Worker registry + CPU sig'imi (capacity) mantiqi
@@ -66,6 +67,28 @@ export async function listWorkers() {
   return prisma.worker.findMany({ orderBy: { id: "asc" } });
 }
 
+// AutomationLog uchun umumiy select — log ro'yxati va qidiruv bir xil maydon
+// to'plamini qaytaradi (worker nomi, vaqt, holat, xato, arizachi).
+const LOG_SELECT = {
+  id: true,
+  stage: true,
+  attempt: true,
+  ok: true,
+  note: true,
+  pageError: true,
+  durationMs: true,
+  statusCode: true,
+  exitIp: true,
+  finalUrl: true,
+  workerProfile: true,
+  applicantId: true,
+  groupId: true,
+  createdAt: true,
+  applicant: {
+    select: { surname: true, name: true, generatedEmail: true },
+  },
+} satisfies Prisma.AutomationLogSelect;
+
 // Bitta workerning bajargan ishlari (step'lar) tarixi — AutomationLog'dan,
 // workerProfile = worker nomi bo'yicha. Eng yangisi birinchi turadi.
 export async function listWorkerLogs(name: string, take = 40) {
@@ -74,22 +97,52 @@ export async function listWorkerLogs(name: string, take = 40) {
     where: { workerProfile: name },
     orderBy: { createdAt: "desc" },
     take: limit,
-    select: {
-      id: true,
-      stage: true,
-      attempt: true,
-      ok: true,
-      note: true,
-      durationMs: true,
-      statusCode: true,
-      exitIp: true,
-      finalUrl: true,
-      applicantId: true,
-      createdAt: true,
-      applicant: {
-        select: { surname: true, name: true, generatedEmail: true },
-      },
-    },
+    select: LOG_SELECT,
+  });
+}
+
+// Loglar bo'yicha QIDIRUV: xato matni (note/pageError), worker nomi, URL yoki
+// arizachi ma'lumoti (familiya/ism/generatedEmail) bo'yicha. Qaysi worker,
+// qachon, qanday holat (ok/xato) bilan tugaganini ko'rsatadi.
+//  - q      : qidiruv matni (bo'sh bo'lsa faqat filtrlar bo'yicha)
+//  - status : "ok" | "fail" (faqat muvaffaqiyatli yoki faqat xatolar)
+//  - stage  : register | login | order | activation | slot
+export type LogSearchFilters = {
+  q?: string;
+  status?: "ok" | "fail";
+  stage?: string;
+  take?: number;
+};
+
+export async function searchLogs(filters: LogSearchFilters) {
+  const q = (filters.q || "").trim();
+  const limit = Math.max(1, Math.min(Math.floor(filters.take || 60), 200));
+  const and: Prisma.AutomationLogWhereInput[] = [];
+
+  if (q) {
+    and.push({
+      OR: [
+        { note: { contains: q } },
+        { pageError: { contains: q } },
+        { workerProfile: { contains: q } },
+        { finalUrl: { contains: q } },
+        { exitIp: { contains: q } },
+        { applicant: { is: { surname: { contains: q } } } },
+        { applicant: { is: { name: { contains: q } } } },
+        { applicant: { is: { generatedEmail: { contains: q } } } },
+        { applicant: { is: { email: { contains: q } } } },
+      ],
+    });
+  }
+  if (filters.status === "ok") and.push({ ok: true });
+  if (filters.status === "fail") and.push({ ok: false });
+  if (filters.stage) and.push({ stage: filters.stage });
+
+  return prisma.automationLog.findMany({
+    where: and.length ? { AND: and } : {},
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: LOG_SELECT,
   });
 }
 
