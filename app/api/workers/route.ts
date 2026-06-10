@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getQueueDepth } from "@/lib/order-queue";
+import { proxyHealthForApi } from "@/lib/proxy";
 import {
   ensureSeed,
   listWorkers,
@@ -51,6 +52,7 @@ async function snapshot() {
     })),
     cpu,
     queueDepth,
+    proxy: proxyHealthForApi(),
   };
 }
 

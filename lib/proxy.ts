@@ -191,3 +191,175 @@ export function shouldLogExitIp(): boolean {
   const v = (process.env.PROXY_LOG_IP || "true").trim().toLowerCase();
   return v !== "false" && v !== "0";
 }
+
+/* ====================================================================
+ *  PROXY SALOMATLIGI (health) — proksi tirikmi yoki o'lik?
+ * --------------------------------------------------------------------
+ *  Worker har register/login/order'dan OLDIN ensureProxyHealthy() ni
+ *  chaqiradi. Proksi o'lik (HTTP 402 = balans tugagan, yoki ulanmaydi)
+ *  bo'lsa — BEHUDA Chrome ochilmaydi, aniq o'zbekcha sabab qaytadi.
+ *  Natija keshlanadi (muvaffaqiyat 30s, xato 10s) — har job proksiga
+ *  urmasin. Tekshiruv ipify (exit IP) so'rovi orqali — VFS'ga TEGMAYDI.
+ * ==================================================================== */
+export type ProxyHealth = {
+  /** Proksi tirikmi (proksi o'chiq bo'lsa ham true — to'siq yo'q). */
+  ok: boolean;
+  /** Proksi umuman .env'da yoqilganmi. */
+  enabled: boolean;
+  /** HTTP status (402 = balans/trafik tugagan). */
+  status?: number;
+  /** Tirik bo'lsa — chiqish (exit) IP. */
+  exitIp?: string;
+  /** 402 — balans/trafik tugagan (eng ko'p uchraydigan sabab). */
+  outOfBalance: boolean;
+  /** UI uchun o'zbekcha sabab/holat matni. */
+  reason: string;
+  /** Tekshirilgan vaqt (ms, Date.now()). */
+  checkedAt: number;
+};
+
+const PROXY_HEALTH_OK_TTL = Number(
+  process.env.PROXY_HEALTH_OK_TTL_MS || 30_000,
+);
+const PROXY_HEALTH_BAD_TTL = Number(
+  process.env.PROXY_HEALTH_BAD_TTL_MS || 10_000,
+);
+const PROXY_HEALTH_TIMEOUT = Number(
+  process.env.PROXY_HEALTH_TIMEOUT_MS || 9_000,
+);
+
+let healthCache: ProxyHealth | null = null;
+let healthInflight: Promise<ProxyHealth> | null = null;
+
+function healthFresh(): boolean {
+  if (!healthCache) return false;
+  const ttl = healthCache.ok ? PROXY_HEALTH_OK_TTL : PROXY_HEALTH_BAD_TTL;
+  return Date.now() - healthCache.checkedAt < ttl;
+}
+
+/** Keshlangan natijani qaytaradi (yo'q bo'lsa null). Proksiga URMAYDI. */
+export function peekProxyHealth(): ProxyHealth | null {
+  return healthCache;
+}
+
+/**
+ * Proksini HOZIR tekshiradi (kesh e'tiborsiz) va natijani keshlaydi.
+ * ipify (exit IP echo) so'rovi orqali — VFS akkauntiga tegmaydi, xavfsiz.
+ */
+export async function checkProxyHealth(): Promise<ProxyHealth> {
+  const now = Date.now();
+  if (!isProxyEnabled()) {
+    healthCache = {
+      ok: true,
+      enabled: false,
+      outOfBalance: false,
+      reason: "Proksi o'chiq (to'g'ridan-to'g'ri internet)",
+      checkedAt: now,
+    };
+    return healthCache;
+  }
+  const cfg = proxyFor({ rotating: true });
+  if (!cfg) {
+    healthCache = {
+      ok: false,
+      enabled: true,
+      outOfBalance: false,
+      reason: "Proksi sozlamasi to'liq emas (.env PROXY_*)",
+      checkedAt: now,
+    };
+    return healthCache;
+  }
+  try {
+    const { request } = await import("playwright");
+    const ctx = await request.newContext({
+      proxy: {
+        server: cfg.server,
+        username: cfg.username,
+        password: cfg.password,
+      },
+      timeout: PROXY_HEALTH_TIMEOUT,
+      ignoreHTTPSErrors: true,
+    });
+    try {
+      const res = await ctx.get(proxyIpEchoUrl());
+      const status = res.status();
+      if (res.ok()) {
+        let exitIp = "";
+        try {
+          exitIp = String((await res.json())?.ip || "");
+        } catch {
+          /* javob JSON emas — IP'siz davom etamiz */
+        }
+        healthCache = {
+          ok: true,
+          enabled: true,
+          status,
+          exitIp,
+          outOfBalance: false,
+          reason: exitIp ? `Tirik (chiqish IP ${exitIp})` : "Tirik",
+          checkedAt: Date.now(),
+        };
+      } else {
+        const outOfBalance = status === 402;
+        healthCache = {
+          ok: false,
+          enabled: true,
+          status,
+          outOfBalance,
+          reason: outOfBalance
+            ? "Proksi balansi/trafigi tugagan (HTTP 402) — IPRoyal hisobini to'ldiring"
+            : `Proksi xato qaytardi (HTTP ${status})`,
+          checkedAt: Date.now(),
+        };
+      }
+    } finally {
+      await ctx.dispose();
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    healthCache = {
+      ok: false,
+      enabled: true,
+      outOfBalance: false,
+      reason: `Proksi ulanmadi: ${msg.slice(0, 120)}`,
+      checkedAt: Date.now(),
+    };
+  }
+  return healthCache;
+}
+
+/**
+ * Worker uchun: kesh yangi bo'lsa uni qaytaradi, aks holda tekshiradi
+ * (BLOKLAYDI — Chrome ochishdan oldin natija kerak). Bir vaqtda bitta
+ * tekshiruv ketadi (inflight dedupe).
+ */
+export async function ensureProxyHealthy(): Promise<ProxyHealth> {
+  if (!isProxyEnabled()) {
+    return {
+      ok: true,
+      enabled: false,
+      outOfBalance: false,
+      reason: "Proksi o'chiq",
+      checkedAt: Date.now(),
+    };
+  }
+  if (healthFresh()) return healthCache as ProxyHealth;
+  if (healthInflight) return healthInflight;
+  healthInflight = checkProxyHealth().finally(() => {
+    healthInflight = null;
+  });
+  return healthInflight;
+}
+
+/**
+ * API/UI uchun: keshni DARROV qaytaradi (BLOKLAMAYDI). Kesh eskirgan bo'lsa
+ * fon rejimida yangilashni boshlaydi — keyingi so'rovda yangi natija bo'ladi.
+ */
+export function proxyHealthForApi(): ProxyHealth | null {
+  if (isProxyEnabled() && !healthFresh() && !healthInflight) {
+    healthInflight = checkProxyHealth().finally(() => {
+      healthInflight = null;
+    });
+  }
+  return healthCache;
+}

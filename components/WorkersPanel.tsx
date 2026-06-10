@@ -40,10 +40,21 @@ type Cpu = {
   message: string;
 };
 
+type ProxyHealth = {
+  ok: boolean;
+  enabled: boolean;
+  status?: number;
+  exitIp?: string;
+  outOfBalance: boolean;
+  reason: string;
+  checkedAt: number;
+};
+
 type Snapshot = {
   workers: WorkerRow[];
   cpu: Cpu;
   queueDepth: number;
+  proxy: ProxyHealth | null;
 };
 
 // ----------------------------- Holat (status) -----------------------------
@@ -277,8 +288,8 @@ export default function WorkersPanel() {
   const total = workers.length;
   const activeCount = workers.filter((w) => w.active).length;
   const busyCount = workers.filter((w) => workerStatus(w) === "busy").length;
-  const readyCount = workers.filter((w) => workerStatus(w) === "ready").length;
   const queueDepth = data?.queueDepth ?? 0;
+  const proxy = data?.proxy ?? null;
   // Modal ochiq bo'lsa, worker holatini jonli (asosiy poll'dan) oladi.
   const liveLogWorker = logsFor
     ? workers.find((w) => w.id === logsFor.id) ?? logsFor
@@ -317,6 +328,32 @@ export default function WorkersPanel() {
         <StatCard label="Band (ishda)" value={busyCount} tone="amber" />
         <StatCard label="Navbatda" value={queueDepth} tone="indigo" />
       </div>
+
+      {/* PROKSI holati — o'lik bo'lsa worker'lar behuda Chrome ochmaydi */}
+      {proxy && proxy.enabled && !proxy.ok && (
+        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+          <Danger size={16} variant="Bold" className="mt-0.5 shrink-0" />
+          <div>
+            <div className="font-semibold">
+              {proxy.outOfBalance
+                ? "Proksi balansi tugagan — ish bajarilmaydi"
+                : "Proksi ishlamayapti — ish bajarilmaydi"}
+            </div>
+            <p className="mt-0.5 leading-relaxed">
+              {proxy.reason}. Worker'lar bu holatda behuda Chrome ochmaydi —
+              proksi tiklangach ishlar avtomatik davom etadi.
+            </p>
+          </div>
+        </div>
+      )}
+      {proxy && proxy.enabled && proxy.ok && (
+        <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+          <TickCircle size={15} variant="Bold" className="shrink-0" />
+          <span className="font-medium">
+            Proksi tirik{proxy.exitIp ? ` · chiqish IP ${proxy.exitIp}` : ""}
+          </span>
+        </div>
+      )}
 
       {/* CPU sig'imi banneri */}
       {cpu && (

@@ -26,6 +26,7 @@ import {
   type TelegramDocument,
 } from "./telegram";
 import { logBookStep } from "./log";
+import { ensureProxyHealthy } from "./proxy";
 
 // Yuklangan Excel/CSV fayllar saqlanadigan papka (loyiha ildizida).
 const IMPORTS_DIR = path.join(process.cwd(), "uploads", "imports");
@@ -155,6 +156,44 @@ async function runStageWithRetry(
   const limit = maxAttempts();
   const profileKey = applicant.generatedEmail || applicant.email || null;
   const input = toAutomationInput(applicant);
+
+  // PROKSI PREFLIGHT: proksi yoqilgan-u o'lik (HTTP 402 balans / ulanmaydi)
+  // bo'lsa — BEHUDA Chrome ochmaymiz (3 marta urinish = 3 ta bo'sh brauzer +
+  // CPU). Bitta aniq AutomationLog yozib, darrov to'xtaymiz. Natija keshlangan
+  // (lib/proxy.ts), shuning uchun har job proksiga urmaydi.
+  const ph = await ensureProxyHealthy();
+  if (!ph.ok) {
+    const startedAt = new Date();
+    await prisma.automationLog
+      .create({
+        data: {
+          applicantId: applicant.id,
+          groupId: applicant.groupId,
+          stage,
+          attempt: 1,
+          ok: false,
+          durationMs: 0,
+          note: ph.reason,
+          workerProfile: workerProfile ?? null,
+          statusCode: ph.status ?? null,
+          proxyServer:
+            (process.env.PROXY_HOST || "").trim() &&
+            (process.env.PROXY_PORT || "").trim()
+              ? `${process.env.PROXY_HOST}:${process.env.PROXY_PORT}`
+              : null,
+          startedAt,
+          finishedAt: new Date(),
+        },
+      })
+      .catch(() => {});
+    return {
+      ok: false,
+      ref: null,
+      note: ph.reason,
+      attempts: 0,
+      durationMs: 0,
+    };
+  }
 
   let lastNote = "";
   let lastRef: string | null = null;
