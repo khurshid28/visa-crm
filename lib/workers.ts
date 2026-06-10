@@ -66,6 +66,33 @@ export async function listWorkers() {
   return prisma.worker.findMany({ orderBy: { id: "asc" } });
 }
 
+// Bitta workerning bajargan ishlari (step'lar) tarixi — AutomationLog'dan,
+// workerProfile = worker nomi bo'yicha. Eng yangisi birinchi turadi.
+export async function listWorkerLogs(name: string, take = 40) {
+  const limit = Math.max(1, Math.min(Math.floor(take), 100));
+  return prisma.automationLog.findMany({
+    where: { workerProfile: name },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      stage: true,
+      attempt: true,
+      ok: true,
+      note: true,
+      durationMs: true,
+      statusCode: true,
+      exitIp: true,
+      finalUrl: true,
+      applicantId: true,
+      createdAt: true,
+      applicant: {
+        select: { surname: true, name: true, generatedEmail: true },
+      },
+    },
+  });
+}
+
 // Active workerlar — har doim tartib (id) bo'yicha. "iwla deganda tartib bn".
 export async function activeWorkers() {
   return prisma.worker.findMany({

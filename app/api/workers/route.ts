@@ -3,6 +3,7 @@ import { getQueueDepth } from "@/lib/order-queue";
 import {
   ensureSeed,
   listWorkers,
+  listWorkerLogs,
   activeWorkers,
   setActive,
   setActiveCount,
@@ -53,7 +54,12 @@ async function snapshot() {
   };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // ?logs=<worker nomi> => o'sha worker bajargan step'lar (AutomationLog).
+  const name = req.nextUrl.searchParams.get("logs");
+  if (name) {
+    return NextResponse.json({ logs: await listWorkerLogs(name) });
+  }
   await ensureSeed();
   return NextResponse.json(await snapshot());
 }

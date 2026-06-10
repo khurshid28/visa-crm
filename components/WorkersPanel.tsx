@@ -11,6 +11,9 @@ import {
   Trash,
   Danger,
   CloseCircle,
+  DocumentText,
+  TickCircle,
+  Clock,
 } from "iconsax-react";
 import { useToast } from "@/components/Toast";
 
@@ -116,12 +119,68 @@ function jobTone(job: string): string {
   return "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
 }
 
+// ----------------------------- Loglar (step'lar) -----------------------------
+// Bitta worker bajargan ishlar tarixi (AutomationLog) — modalda ko'rsatiladi.
+type WorkerLog = {
+  id: number;
+  stage: string;
+  attempt: number;
+  ok: boolean;
+  note: string | null;
+  durationMs: number;
+  statusCode: number | null;
+  exitIp: string | null;
+  finalUrl: string | null;
+  applicantId: number | null;
+  createdAt: string;
+  applicant: {
+    surname: string | null;
+    name: string | null;
+    generatedEmail: string | null;
+  } | null;
+};
+
+// Bosqich (stage) nomlari — log modalida o'qiladigan ko'rinishda.
+const STAGE_LABELS: Record<string, string> = {
+  register: "Ro'yxatdan o'tish",
+  login: "Kirish",
+  order: "Buyurtma",
+  activation: "Faollashtirish",
+  slot: "Slot tekshiruvi",
+};
+
+function applicantName(a: WorkerLog["applicant"]): string {
+  if (!a) return "";
+  const full = [a.surname, a.name].filter(Boolean).join(" ").trim();
+  return full || a.generatedEmail || "";
+}
+
+// Log vaqti: bugun bo'lsa HH:MM:SS, aks holda DD/MM HH:MM.
+function fmtTime(v: string): string {
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  const t = d.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  if (d.toDateString() === new Date().toDateString()) return t;
+  const dm = d.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+  });
+  return `${dm} ${t.slice(0, 5)}`;
+}
+
 export default function WorkersPanel() {
   const { toast } = useToast();
   const [data, setData] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [addInput, setAddInput] = useState("");
   const [confirmDel, setConfirmDel] = useState<WorkerRow | null>(null);
+  const [logsFor, setLogsFor] = useState<WorkerRow | null>(null);
+  const [logs, setLogs] = useState<WorkerLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -178,6 +237,41 @@ export default function WorkersPanel() {
     await act("delete", id);
   }, [confirmDel, act]);
 
+  // Worker loglarini (step'larini) yuklaydi.
+  const loadLogs = useCallback(async (name: string) => {
+    setLogsLoading(true);
+    try {
+      const res = await fetch(`/api/workers?logs=${encodeURIComponent(name)}`, {
+        cache: "no-store",
+      });
+      const json = (await res.json().catch(() => null)) as {
+        logs?: WorkerLog[];
+      } | null;
+      if (res.ok && json?.logs) setLogs(json.logs);
+    } catch {
+      // jim
+    } finally {
+      setLogsLoading(false);
+    }
+  }, []);
+
+  // Worker kartochkasidagi "Loglar" bosilganda modalni ochadi.
+  const openLogs = useCallback(
+    (w: WorkerRow) => {
+      setLogsFor(w);
+      setLogs([]);
+      loadLogs(w.name);
+    },
+    [loadLogs],
+  );
+
+  // Modal ochiq turganda har 4 soniyada loglarni jonli yangilaydi.
+  useEffect(() => {
+    if (!logsFor) return;
+    const id = window.setInterval(() => loadLogs(logsFor.name), 4000);
+    return () => window.clearInterval(id);
+  }, [logsFor, loadLogs]);
+
   const cpu = data?.cpu;
   const workers = data?.workers ?? [];
   const total = workers.length;
@@ -185,6 +279,10 @@ export default function WorkersPanel() {
   const busyCount = workers.filter((w) => workerStatus(w) === "busy").length;
   const readyCount = workers.filter((w) => workerStatus(w) === "ready").length;
   const queueDepth = data?.queueDepth ?? 0;
+  // Modal ochiq bo'lsa, worker holatini jonli (asosiy poll'dan) oladi.
+  const liveLogWorker = logsFor
+    ? workers.find((w) => w.id === logsFor.id) ?? logsFor
+    : null;
 
   return (
     <div className="card">
@@ -361,6 +459,14 @@ export default function WorkersPanel() {
                 </div>
               )}
 
+              {/* Loglarni ko'rish (step'lar) */}
+              <button
+                onClick={() => openLogs(w)}
+                className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 py-1.5 text-[11px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600 dark:border-slate-700 dark:text-slate-400 dark:hover:border-indigo-500/30 dark:hover:bg-indigo-500/10 dark:hover:text-indigo-300"
+              >
+                <DocumentText size={13} variant="Bold" /> Loglar (step'lar)
+              </button>
+
               {/* Yoqish/o'chirish — chiroyli toggle */}
               <div className="mt-2.5 flex items-center justify-between border-t border-slate-100 pt-2.5 dark:border-slate-800">
                 <span
@@ -404,11 +510,160 @@ export default function WorkersPanel() {
 
       <p className="mt-3 text-[11px] text-slate-400">
         Toggle bilan yoqing/o'chiring, savatcha bilan o'chiring. Band worker
-        hozir bajarayotgan taskni ko'rsatadi. Pool:{" "}
+        hozir bajarayotgan taskni ko'rsatadi. &quot;Loglar&quot; bilan har bir
+        worker bajargan step'larni ko'ring. Pool:{" "}
         <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">
           npm run workers:run
         </code>
       </p>
+
+      {/* Worker loglari (step'lar) modali */}
+      {logsFor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
+            onClick={() => setLogsFor(null)}
+          />
+          <div className="relative z-10 flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-slate-900">
+            {/* Sarlavha */}
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300">
+                  <DocumentText size={18} variant="Bold" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="truncate text-sm font-bold text-slate-800 dark:text-slate-100">
+                    {logsFor.name} — loglar
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Bajarilgan step'lar tarixi (eng yangisi yuqorida)
+                  </p>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  onClick={() => loadLogs(logsFor.name)}
+                  disabled={logsLoading}
+                  title="Yangilash"
+                  className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                >
+                  <Refresh size={16} />
+                </button>
+                <button
+                  onClick={() => setLogsFor(null)}
+                  title="Yopish"
+                  className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                >
+                  <CloseCircle size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Hozir bajarayotgan ish (jonli) */}
+            {liveLogWorker?.currentJob && (
+              <div
+                className={`mx-5 mt-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${jobTone(
+                  liveLogWorker.currentJob,
+                )}`}
+              >
+                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-current" />
+                Hozir bajaryapti: ▶ {liveLogWorker.currentJob}
+              </div>
+            )}
+
+            {/* Step'lar ro'yxati */}
+            <div className="flex-1 overflow-y-auto px-5 py-3">
+              {logsLoading && logs.length === 0 ? (
+                <p className="py-10 text-center text-sm text-slate-400">
+                  Yuklanmoqda…
+                </p>
+              ) : logs.length === 0 ? (
+                <div className="py-10 text-center">
+                  <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-slate-300 dark:bg-slate-800 dark:text-slate-600">
+                    <DocumentText size={24} variant="Bold" />
+                  </span>
+                  <p className="mt-3 text-sm text-slate-400">
+                    Bu worker hali ish bajarmagan — log yo'q.
+                  </p>
+                </div>
+              ) : (
+                <ol className="space-y-2">
+                  {logs.map((l) => (
+                    <li
+                      key={l.id}
+                      className="rounded-xl border border-slate-100 p-3 dark:border-slate-800"
+                    >
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        {l.ok ? (
+                          <TickCircle
+                            size={15}
+                            variant="Bold"
+                            className="shrink-0 text-emerald-500"
+                          />
+                        ) : (
+                          <CloseCircle
+                            size={15}
+                            variant="Bold"
+                            className="shrink-0 text-rose-500"
+                          />
+                        )}
+                        <span
+                          className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold ${jobTone(
+                            l.stage,
+                          )}`}
+                        >
+                          {STAGE_LABELS[l.stage] || l.stage}
+                        </span>
+                        {l.attempt > 1 && (
+                          <span className="text-[10px] text-slate-400">
+                            urinish #{l.attempt}
+                          </span>
+                        )}
+                        {l.applicantId != null && (
+                          <span className="min-w-0 truncate text-[11px] text-slate-500 dark:text-slate-400">
+                            #{l.applicantId}
+                            {applicantName(l.applicant)
+                              ? ` · ${applicantName(l.applicant)}`
+                              : ""}
+                          </span>
+                        )}
+                        <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-slate-400">
+                          <Clock size={11} /> {fmtTime(l.createdAt)}
+                        </span>
+                      </div>
+                      {l.note && (
+                        <p className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                          {l.note}
+                        </p>
+                      )}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                        {l.statusCode != null && (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                            HTTP {l.statusCode}
+                          </span>
+                        )}
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                          {(l.durationMs / 1000).toFixed(1)}s
+                        </span>
+                        {l.exitIp && (
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                            IP {l.exitIp}
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+
+            {/* Pastki izoh */}
+            <div className="border-t border-slate-100 px-5 py-2.5 text-center text-[11px] text-slate-400 dark:border-slate-800">
+              Har 4 soniyada jonli yangilanadi · {logs.length} ta step
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* O'chirishni tasdiqlash modali */}
       {confirmDel && (
